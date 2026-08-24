@@ -1,0 +1,1116 @@
+(function () {
+  'use strict';
+
+  if (typeof window.gsap === 'undefined') {
+    console.warn('[Tabs] GSAP fehlt — Komponente startet nicht.');
+    return;
+  }
+
+  var CFG = {
+    folgen:       0.24,  // Trägheit der Pille pro Frame (kleiner = weicher)
+    navTor:       0,     // Pille läuft am Finger mit
+    fadeTor:      0.3,   // Blende setzt nach knapp einem Drittel ein
+    fadeDauer:    0.28,
+    fadeStaerke:  1,
+    swapDauer:    0.26,  // Text ⇄ Punkte
+    morphDauer:   0.5,   // Breite der Pille — bewusst länger als der Inhalt
+    hoverAus:     0.12,
+    reise:        0.48,  // Sprung per Button
+    reiseKurve:   'power3.out',
+    navKurve:     'power2.inOut',  // eigene Kurve der Pille, wenn aktiviert
+    zurueckReise: 0.42,  // Nachfedern nach dem Loslassen
+    ueberschwung: 6,     // px — dezent, kein Cartoon
+    stauchen:     0.13,
+    zurueck:      0.42,
+    hoehe:        0.45,
+    dotsHold:     1100,
+    intro:        1400,  // ms, wie lange die Punkte beim Seitenaufruf stehen
+    wurf:         0.3,   // px/ms, ab wann ein Zug als Wurf zählt
+    wurfWeg:      0.12,  // Anteil der Trackbreite, der ohne Wurf reicht
+    dotAbfall:    0.3,   // wieviel kleiner je Schritt nach außen
+    dotMin:       0.4,   // Untergrenze der Punktgröße
+    dotFenster:   5,     // wieviele Punkte breit die Pille höchstens wird
+    shape:        1,     // Verformung der Pille beim Laufen
+    shapeK:       2.2,   // Umrechnung Tempo → Dehnung
+    shapeMax:     0.3    // Obergrenze der Dehnung
+  };
+
+  var weich = window.matchMedia('(prefers-reduced-motion: reduce)');
+  var instanzen = [];
+
+  var qq  = function (el, sel) { return [].slice.call(el.querySelectorAll(sel)); };
+  var mix = function (a, b, t) { return a + (b - a) * t; };
+  var dur = function (d) { return weich.matches ? 0 : d; };
+  var kappe = function (v, a, b) { return Math.max(a, Math.min(b, v)); };
+
+  // "0.5" und "50%" sollen beide gehen — im Designer tippt man mal so,
+  // mal so, und ein stiller NaN wäre die schlechteste aller Antworten.
+  function anteil(el, attr, fb) {
+    var s = el.getAttribute(attr);
+    if (s === null || s === '') return fb;
+    var prozent = s.indexOf('%') > -1;
+    var v = parseFloat(s);
+    if (isNaN(v)) { console.warn('[Tabs] ' + attr + '="' + s + '" ist keine Zahl — es gilt ' + fb + '.', el); return fb; }
+    return prozent ? v / 100 : v;
+  }
+
+  function bauen(root) {
+    var track  = root.querySelector('[data-tabs-track]');
+    var slides = track ? qq(track, '[data-tabs-slide]') : [];
+    if (!track || !slides.length) {
+      console.warn('[Tabs] Kein [data-tabs-track] oder keine [data-tabs-slide] darin.', root);
+      return null;
+    }
+
+    var name = root.getAttribute('data-tabs') || 'tabs';
+
+    /* ── Wo darf gesucht werden? ─────────────────────────────────
+       Ein Element gehört zu dieser Instanz, wenn es IM Wrapper
+       liegt — oder wenn es AUSSERHALB liegt und sein Attributwert
+       dem Namen der Instanz entspricht:
+
+         <div data-tabs="reservierungen"> … Track … </div>
+         <div data-tabs-nav="reservierungen"> … Pille … </div>
+
+       Damit kann die Navigation an einer ganz anderen Stelle im
+       DOM stehen, etwa in einer fixierten Leiste am unteren Rand.
+       Ohne Wert bleibt alles wie bisher. */
+    function aussen(attr) {
+      return qq(document, '[' + attr + ']').filter(function (el) {
+        return (el.getAttribute(attr) || '') === name && !root.contains(el);
+      })[0] || null;
+    }
+
+    var nav = root.querySelector('[data-tabs-nav]') || aussen('data-tabs-nav');
+
+    // Alles, was üblicherweise in der Nav sitzt, wird in beiden
+    // Bereichen gesucht: Wrapper und ausgelagerte Nav.
+    var bereiche = (nav && !root.contains(nav)) ? [root, nav] : [root];
+    function eins(sel) {
+      for (var i = 0; i < bereiche.length; i++) {
+        var e = bereiche[i].querySelector(sel);
+        if (e) return e;
+      }
+      return null;
+    }
+    function alle(sel) {
+      var out = [];
+      bereiche.forEach(function (b) { out = out.concat(qq(b, sel)); });
+      return out;
+    }
+
+    var indicator = eins('[data-tabs-indicator]');
+    var ghost     = eins('[data-tabs-ghost]');
+    var dotsBox   = eins('[data-tabs-dots]');
+    var alleIdles = alle('[data-tabs-idle]');
+
+    // Die Pille darf auch fehlen — dann ist es der Elternteil der
+    // Punkte. Ohne Positionierung darauf würden die Punkte sonst
+    // irgendwo auf der Seite kleben, weil sie absolut liegen.
+    var pill = eins('[data-tabs-pill]')
+            || (dotsBox && dotsBox.parentElement)
+            || (alleIdles[0] && alleIdles[0].parentElement);
+    if (pill && getComputedStyle(pill).position === 'static') pill.style.position = 'relative';
+
+    var live = root.getAttribute('data-tabs-fade') === 'live';
+    var autoHoehe = root.getAttribute('data-tabs-height') !== 'fixed';
+    var hoverAn = root.getAttribute('data-tabs-pill-hover') !== 'off';
+    var ziehenAn = root.getAttribute('data-tabs-drag') !== 'off';
+    var sperreAus = root.getAttribute('data-tabs-swipe-desktop') === 'off';
+    var abBreite = anteil(root, 'data-tabs-desktop', 992);
+    var mqDesk = window.matchMedia('(min-width: ' + abBreite + 'px)');
+
+    var navTor      = kappe(anteil(root, 'data-tabs-nav-threshold',  CFG.navTor), 0, 1);
+    var fadeTor     = kappe(anteil(root, 'data-tabs-fade-threshold', CFG.fadeTor), 0, 1);
+    var fadeDauer   = Math.max(0, anteil(root, 'data-tabs-fade-duration', CFG.fadeDauer));
+    var fadeStaerke = kappe(anteil(root, 'data-tabs-fade-intensity', CFG.fadeStaerke), 0, 1);
+    var swapDauer   = Math.max(0, anteil(root, 'data-tabs-swap-duration', CFG.swapDauer));
+    var morphDauer  = Math.max(0, anteil(root, 'data-tabs-morph-duration', CFG.morphDauer));
+    var folgen      = kappe(anteil(root, 'data-tabs-ease', CFG.folgen), 0.02, 1);
+    var halten      = anteil(root, 'data-tabs-dots-hold', CFG.dotsHold);
+    var reise       = Math.max(0, anteil(root, 'data-tabs-travel', CFG.reise));
+    var reiseKurve  = root.getAttribute('data-tabs-travel-ease') || CFG.reiseKurve;
+    if (!gsap.parseEase(reiseKurve)) {
+      console.warn('[Tabs] data-tabs-travel-ease="' + reiseKurve + '" kennt GSAP nicht — es gilt ' + CFG.reiseKurve + '.', root);
+      reiseKurve = CFG.reiseKurve;
+    }
+    var intro       = root.getAttribute('data-tabs-intro') === 'off'
+                        ? 0 : anteil(root, 'data-tabs-intro', CFG.intro);
+
+    // Eigene Kurve für die Pille: sobald eines der beiden Attribute
+    // gesetzt ist, läuft sie beim Sprung nicht mehr auf der Kurve des
+    // Tracks, sondern auf ihrer eigenen. Am Finger bleibt sie am Finger.
+    var navEigenAn  = root.hasAttribute('data-tabs-nav-ease') || root.hasAttribute('data-tabs-nav-duration');
+    var navDauer    = Math.max(0, anteil(root, 'data-tabs-nav-duration', reise));
+    var navKurve    = root.getAttribute('data-tabs-nav-ease') || CFG.navKurve;
+    if (navEigenAn && !gsap.parseEase(navKurve)) {
+      console.warn('[Tabs] data-tabs-nav-ease="' + navKurve + '" kennt GSAP nicht — es gilt ' + CFG.navKurve + '.', root);
+      navKurve = CFG.navKurve;
+    }
+    var boden       = 1 - fadeStaerke;   // Restdeckkraft des ausgeblendeten Inhalts
+    var zentriert   = root.getAttribute('data-tabs-dots-center') !== 'off';
+    var dotFenster  = Math.max(1, anteil(root, 'data-tabs-dots-window', CFG.dotFenster));
+    var dotAbfall   = Math.max(0, anteil(root, 'data-tabs-dot-falloff', CFG.dotAbfall));
+    var dotMin      = kappe(anteil(root, 'data-tabs-dot-min', CFG.dotMin), 0, 1);
+    var shapeKraft  = Math.max(0, anteil(root, 'data-tabs-shape', CFG.shape));
+
+    /* ── Buttons, Panels und Ruheinhalte zuordnen ────────────── */
+    var ids = slides.map(function (s, i) {
+      return s.getAttribute('data-tabs-slide') || String(i);
+    });
+
+    function paaren(liste, attr) {
+      return ids.map(function (id, i) {
+        var treffer = liste.filter(function (el) { return (el.getAttribute(attr) || '') === id; })[0];
+        return treffer || liste[i] || null;
+      });
+    }
+
+    var alleButtons = nav ? qq(nav, '[data-tabs-button]') : [];
+    var buttons = paaren(alleButtons, 'data-tabs-button');
+    var hatNav = Boolean(nav && indicator) && buttons.every(Boolean);
+    if (nav && !hatNav) {
+      console.warn('[Tabs] "' + name + '": ' + alleButtons.length + ' Buttons zu ' + slides.length + ' Slides, oder [data-tabs-indicator] fehlt — Nav läuft ohne Pille.', root);
+    }
+
+    var panelsWrap = eins('[data-tabs-panels]');
+    var allePanels = alle('[data-tabs-panel]');
+    var panels = allePanels.length ? paaren(allePanels, 'data-tabs-panel').filter(Boolean) : [];
+    if (allePanels.length && panels.length !== slides.length) {
+      console.warn('[Tabs] "' + name + '": ' + allePanels.length + ' Panels zu ' + slides.length + ' Slides — Panels bleiben aus.', root);
+      panels = [];
+    }
+    if (panels.length && !panelsWrap) {
+      console.warn('[Tabs] "' + name + '": Panels ohne [data-tabs-panels] — sie stehen untereinander statt übereinander.', root);
+    }
+
+    // Ein Ruheinhalt gilt für alles, mehrere gelten je Slide.
+    var idles = alleIdles.slice(0, 1);
+    if (alleIdles.length > 1) {
+      if (alleIdles.length !== slides.length) {
+        console.warn('[Tabs] "' + name + '": ' + alleIdles.length + ' Ruheinhalte zu ' + slides.length + ' Slides — es gilt nur der erste.', root);
+      } else {
+        idles = paaren(alleIdles, 'data-tabs-idle').filter(Boolean);
+        // Sie müssen übereinander liegen, sonst zieht die Pille auf.
+        var eltern = idles[0].parentElement;
+        if (!idles.every(function (el) { return el.parentElement === eltern; })) {
+          console.warn('[Tabs] "' + name + '": Die [data-tabs-idle] liegen in verschiedenen Containern — sie müssen sich denselben teilen.', root);
+        } else {
+          if (getComputedStyle(eltern).display.indexOf('grid') < 0) {
+            eltern.style.display = 'grid';
+            eltern.style.alignItems = 'center';
+            eltern.style.justifyItems = 'center';
+          }
+          idles.forEach(function (el) { el.style.gridArea = '1/1'; });
+        }
+      }
+    }
+    var idleProSlide = idles.length > 1;
+
+    var slideFade = panels.length
+      ? root.getAttribute('data-tabs-slide-fade') === 'on'
+      : root.getAttribute('data-tabs-slide-fade') !== 'off';
+    var faden = [];
+    if (panels.length) faden.push(panels);
+    if (slideFade) faden.push(slides);
+
+    /* ── Hintergrund ─────────────────────────────────────────────
+       Ohne Wert: irgendwo im Wrapper. Mit Wert: irgendwo auf der
+       Seite, z.B. am Body — damit auch die Seitenfarbe mitgehen
+       kann, ohne dass sie im Wrapper liegen muss. */
+    var bgs = qq(document, '[data-tabs-bg]').filter(function (el) {
+      var v = el.getAttribute('data-tabs-bg') || '';
+      return v ? v === name : root.contains(el);
+    });
+    var bgKlassen = slides.map(function (s, i) {
+      return s.getAttribute('data-tabs-bg-class')
+          || (buttons[i] && buttons[i].getAttribute('data-tabs-bg-class'))
+          || '';
+    });
+    var bgDauer = anteil(root, 'data-tabs-bg-duration', 0.45);
+    bgs.forEach(function (el) { el.style.setProperty('--tabs-bg-duration', bgDauer + 's'); });
+    if (bgs.length && !bgKlassen.some(Boolean)) {
+      console.info('[Tabs] "' + name + '": Hintergrund ohne [data-tabs-bg-class] — es wird nur [data-tabs-bg-active] gesetzt.');
+    }
+
+    if (idles.length && !dotsBox) console.warn('[Tabs] "' + name + '": [data-tabs-idle] ohne [data-tabs-dots] — es gibt nichts zum Umschalten.', root);
+    if (dotsBox && !dotsBox.querySelector('[data-tabs-dot]')) console.warn('[Tabs] "' + name + '": keine Punkt-Vorlage [data-tabs-dot] gefunden — es werden schlichte Punkte gebaut.', dotsBox);
+    console.info('[Tabs] "' + name + '": ' + slides.length + ' Slides · Nav '
+      + (hatNav ? (root.contains(nav) ? 'ja' : 'ja (ausgelagert)') : 'nein')
+      + ' · Panels ' + (panels.length ? 'ja' : 'nein') + ' · Pille ' + (pill ? 'ja' : 'nein')
+      + ' · Punkte ' + (dotsBox ? 'ja' : 'nein') + ' · Ruheinhalt ' + (idles.length || 'nein')
+      + ' · Hintergrund ' + (bgs.length || 'nein'));
+
+    /* ── Zustand ─────────────────────────────────────────────── */
+    var ziele = [], rects = [], hoehen = [], breitenIdle = [], breiteDots = 0;
+    var rohZiel = 0, rohWeich = 0, navZiel = 0, navWeich = 0, tickt = false;
+    var navIndex = -1, blendIndex = -1, idleIndex = 0, anker = 0;
+    var schub = { v: 0 }, stauch = { v: 1 };
+    var endeT = null, dotT = null, korrekturT = null, roT = null;
+    var gleitet = false, ghostAn = false, hovert = false, beruehrt = false, beruehrtT = null;
+    var gesperrt = false, gefuehrt = false;
+    var zieh = { an: false, x: 0, start: 0, weg: 0, index: 0, letztX: 0, letztT: 0, v: 0 };
+    var navProxy = { v: 0 }, navEigen = null;
+    var fuehr = { v: 0 }, fuehrF = 0;
+
+    var klemm = function (i) { return Math.max(0, Math.min(slides.length - 1, i)); };
+
+    /* ── Torschwelle ─────────────────────────────────────────────
+       Gemessen wird der Weg AB DEM STARTPUNKT, nicht ab der linken
+       Nachbarslide. Sonst wird die Schwelle richtungsabhängig: bei
+       t=1 wartet die Pille vorwärts bis zum Einrasten, rückwärts
+       läuft sie sofort los, weil Math.floor() beim Rückweg schon
+       auf der Zielslide steht. Genau das war der Unterschied
+       zwischen 1→2 und 2→1. */
+    function tor(f, t, anker) {
+      if (t <= 0) return f;
+      var d = f - anker;
+      if (!d) return anker;
+      var s = d > 0 ? 1 : -1;
+      var abs = Math.abs(d);
+      var ganze = Math.floor(abs);
+      var rest = abs - ganze;
+      var g = t >= 1 ? 0 : kappe((rest - t) / (1 - t), 0, 1);
+      return anker + s * (ganze + g);
+    }
+
+    // Der Startpunkt wandert mit, sobald ein voller Schritt liegt.
+    function ankerNachziehen() {
+      var d = rohZiel - anker;
+      if (Math.abs(d) >= 1) anker += (d > 0 ? 1 : -1) * Math.floor(Math.abs(d));
+    }
+
+    /* ── Messen ──────────────────────────────────────────────── */
+    function scrollZiel(i) {
+      var f = slides[i];
+      var a = (getComputedStyle(f).scrollSnapAlign || 'center').split(' ').pop();
+      var v = a === 'start' ? f.offsetLeft - (parseFloat(getComputedStyle(track).paddingLeft) || 0)
+            : a === 'end'   ? f.offsetLeft + f.offsetWidth - track.clientWidth
+            :                 f.offsetLeft - (track.clientWidth - f.offsetWidth) / 2;
+      return Math.max(0, Math.min(track.scrollWidth - track.clientWidth, v));
+    }
+
+    // Jeder Zustand der Pille wird einmal frei gemessen, danach steht
+    // die Breite fest und wird nur noch getweent.
+    function pilleMessen() {
+      if (!pill) return;
+      var vorher = pill.style.width;
+      pill.style.width = 'auto';
+      var cs = getComputedStyle(pill);
+      var rand = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
+               + (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.borderRightWidth) || 0);
+      breitenIdle = idles.map(function (el) { return Math.ceil(el.offsetWidth + rand); });
+
+      // Abstand von Punktmitte zu Punktmitte — daraus ergibt sich, wie
+      // weit die Reihe geschoben werden muss und wie breit die Pille
+      // sein darf. Ohne Zentrierung bleibt es bei der vollen Reihe.
+      schritt = punkte.length > 1 ? Math.abs(punkte[1].offsetLeft - punkte[0].offsetLeft) : 0;
+      if (dotsBox) {
+        var sichtbar = Math.min(punkte.length, dotFenster);
+        var eigen = punkte[0] ? punkte[0].offsetWidth : 0;
+        breiteDots = (zentriert && schritt && sichtbar < punkte.length)
+          ? Math.ceil(schritt * (sichtbar - 1) + eigen + rand)
+          : Math.ceil(dotsBox.offsetWidth + rand);
+      } else {
+        breiteDots = breitenIdle[0] || pill.offsetWidth;
+      }
+      pill.style.width = vorher || pillZiel() + 'px';
+    }
+
+    function messen() {
+      ziele  = slides.map(function (_, i) { return scrollZiel(i); });
+      hoehen = (panels.length ? panels : slides).map(function (s) { return s.offsetHeight; });
+      if (hatNav) {
+        rects = buttons.map(function (b) {
+          return { left: b.offsetLeft, width: b.offsetWidth, top: b.offsetTop, height: b.offsetHeight };
+        });
+      }
+      pilleMessen();
+      if (slides[0] && track.clientWidth && slides[0].offsetWidth < track.clientWidth * 0.6) {
+        console.warn('[Tabs] "' + name + '": Die Slides sind schmaler als der Track. Breite im Designer auf 100% stellen.');
+      }
+    }
+
+    /* ── Bruchzahl aus der Scrollposition ────────────────────── */
+    function bruch() {
+      var x = track.scrollLeft, n = ziele.length;
+      if (n < 2) return 0;
+      if (x <= ziele[0]) return 0;
+      if (x >= ziele[n - 1]) return n - 1;
+      for (var i = 0; i < n - 1; i++) {
+        var a = ziele[i], b = ziele[i + 1];
+        if (x >= a && x <= b) return b === a ? i : i + (x - a) / (b - a);
+      }
+      return n - 1;
+    }
+
+    /* ── Glättung ────────────────────────────────────────────────
+       Roh gescrollt wird ruckartig: Trackpads liefern Sprünge, das
+       Einrasten kommt in wenigen groben Frames. Beide Werte jagen
+       ihrem Ziel mit fester Trägheit hinterher — die Pille dem
+       beschnittenen, die Punkte dem rohen. */
+    function ticker() {
+      var a = navEigen ? 0 : navZiel - navWeich, b = rohZiel - rohWeich;
+      var f = Math.min(1, folgen * gsap.ticker.deltaRatio());
+      var fertig = Math.abs(a) < 0.0008 && Math.abs(b) < 0.0008;
+      if (!navEigen) navWeich = fertig ? navZiel : navWeich + a * f;
+      rohWeich = fertig ? rohZiel : rohWeich + b * f;
+      zeichnen();
+      if (fertig) { gsap.ticker.remove(ticker); tickt = false; }
+    }
+
+    function jagen() {
+      rohZiel = gefuehrt ? fuehrF : bruch();
+      ankerNachziehen();
+      navZiel = tor(rohZiel, navTor, anker);
+      // Die Glättung ist ein Filter gegen ruckelige Eingaben. Führt
+      // GSAP den Track selbst, ist die Eingabe schon weich — dann
+      // legt der Filter nur eine zweite Verzögerung obendrauf, und
+      // die Pille bleibt am Anfang sichtbar stehen.
+      if (weich.matches || gefuehrt) {
+        if (!navEigen) navWeich = navZiel;
+        rohWeich = rohZiel;
+        zeichnen();
+      }
+      else if (!tickt) { tickt = true; gsap.ticker.add(ticker); }
+
+      var n = klemm(Math.round(navZiel));
+      if (n !== navIndex) { navIndex = n; navZustand(n); }
+      blendZu(klemm(Math.round(tor(rohZiel, fadeTor, anker))));
+    }
+
+    /* ── Zeichnen ────────────────────────────────────────────────
+       Läuft pro Frame. Deshalb: keine gsap.set-Aufrufe (jeder baut
+       intern einen Tween), keine Schreibvorgänge auf Werte, die
+       sich nicht geändert haben. Ein unveränderter style-Write
+       kostet den Browser trotzdem eine Neuberechnung. */
+    var iAlt = { t: '', w: -1, h: -1 }, hAlt = -1;
+    var navVor = 0, letzterFrame = -1, dehnung = 0;
+
+    // Tempo → Form: je schneller die Pille läuft, desto mehr zieht sie
+    // sich in Laufrichtung lang und wird flacher. Gemessen wird pro
+    // Frame, nicht pro Aufruf — zeichnen() läuft manchmal mehrfach im
+    // selben Frame, und der zweite Aufruf sähe sonst Tempo null.
+    function formen() {
+      if (!shapeKraft) return 0;
+      var frame = gsap.ticker.frame;
+      if (frame === letzterFrame) return dehnung;
+      letzterFrame = frame;
+      var v = Math.abs(navWeich - navVor);
+      navVor = navWeich;
+      var ziel = Math.min(CFG.shapeMax, v * CFG.shapeK) * shapeKraft;
+      // Aufbauen darf sie schnell, zurückgehen langsamer — sonst
+      // flackert die Form bei jedem Tempowechsel.
+      dehnung = ziel > dehnung ? ziel : dehnung + (ziel - dehnung) * 0.25;
+      return dehnung;
+    }
+
+    function zeichnen() {
+      if (hatNav && rects.length) {
+        var f = navWeich;
+        var i0 = Math.max(0, Math.floor(f)), i1 = Math.min(slides.length - 1, Math.ceil(f)), t = f - i0;
+        var a = rects[i0], b = rects[i1];
+        var x = Math.round((mix(a.left, b.left, t) + schub.v) * 10) / 10;
+        var y = Math.round(mix(a.top, b.top, t) * 10) / 10;
+        var w = Math.round(mix(a.width, b.width, t) * 10) / 10;
+        var h = Math.round(mix(a.height, b.height, t) * 10) / 10;
+        var dh = formen();
+        var sx = Math.round((1 + dh) * 1000) / 1000;
+        var sy = Math.round(stauch.v * (1 - dh * 0.6) * 1000) / 1000;
+        var tf = 'translate3d(' + x + 'px,' + y + 'px,0)'
+               + (sx === 1 && sy === 1 ? '' : ' scale(' + sx + ',' + sy + ')');
+        if (tf !== iAlt.t) { indicator.style.transform = tf; iAlt.t = tf; }
+        if (w !== iAlt.w) { indicator.style.width = w + 'px'; iAlt.w = w; }
+        if (h !== iAlt.h) { indicator.style.height = h + 'px'; iAlt.h = h; }
+      }
+
+      // Solange die Punkte weg sind, muss ihre Größe nicht pro Frame
+      // nachgerechnet werden — nur der aktive Zustand muss stimmen,
+      // falls sie gleich auftauchen.
+      if (gleitet || dotAktiv !== klemm(Math.round(rohWeich))) punkteMalen(rohWeich);
+
+      if (!live) return;
+      var g = tor(rohWeich, fadeTor, anker);
+      var j0 = Math.max(0, Math.floor(g)), j1 = Math.min(slides.length - 1, Math.ceil(g)), tt = g - j0;
+      faden.forEach(function (liste) {
+        liste.forEach(function (s, i) {
+          var d = Math.min(1, Math.abs(i - g));
+          var o = Math.round((1 - d * fadeStaerke) * 1000) / 1000;
+          if (s._tabsO !== o) {
+            s.style.opacity = o;
+            if (s._tabsV !== 1) { s.style.visibility = ''; s._tabsV = 1; }
+            s._tabsO = o;
+          }
+          var pe = d < 0.5 ? 1 : 0;
+          if (s._tabsP !== pe) { s.style.pointerEvents = pe ? '' : 'none'; s._tabsP = pe; }
+        });
+      });
+      if (autoHoehe && hoehen.length) {
+        var hh = Math.round(mix(hoehen[j0], hoehen[j1], tt));
+        if (hh !== hAlt) { (panelsWrap || track).style.height = hh + 'px'; hAlt = hh; }
+      }
+    }
+
+    /* ── Blende ──────────────────────────────────────────────────
+       Zwei Dinge, die nicht zusammengehören: die Buchhaltung
+       (welcher Index gilt — Zustände, Ruheinhalt, Hintergrund) und
+       die Deckkraft. Im Live-Modus macht zeichnen() die Deckkraft
+       Frame für Frame, die Buchhaltung muss trotzdem laufen. */
+    function blendZu(i, sofort) {
+      if (i === blendIndex) return;
+      var vor = blendIndex;
+      blendIndex = i;
+      inhaltZustand(i);
+      idleZu(i, sofort);
+      bgSetzen(i);
+      if (live && !sofort) return;
+
+      var d = sofort ? 0 : dur(fadeDauer);
+      // GSAP schreibt hier gleich selbst auf opacity/visibility —
+      // der Zwischenspeicher von zeichnen() wäre danach gelogen.
+      hAlt = -1;
+      faden.forEach(function (liste) {
+        liste.forEach(function (el) { el._tabsO = el._tabsV = el._tabsP = undefined; });
+      });
+      faden.forEach(function (liste) {
+        liste.forEach(function (el, k) {
+          if (k === i || k === vor) return;
+          gsap.killTweensOf(el);
+          gsap.set(el, { autoAlpha: boden });
+          el.style.pointerEvents = 'none';
+        });
+        var raus = liste[vor], rein = liste[i];
+        if (raus) {
+          gsap.killTweensOf(raus);
+          raus.style.pointerEvents = 'none';
+          gsap.to(raus, { autoAlpha: boden, duration: d * 0.6, ease: 'power2.out' });
+        }
+        if (rein) {
+          gsap.killTweensOf(rein);
+          rein.style.pointerEvents = '';
+          gsap.to(rein, { autoAlpha: 1, duration: d, ease: 'power2.out', delay: d * 0.2 });
+        }
+      });
+
+      if (autoHoehe && hoehen.length) {
+        var el2 = panelsWrap || track;
+        if (sofort) gsap.set(el2, { height: hoehen[i] });
+        else gsap.to(el2, { height: hoehen[i], duration: dur(CFG.hoehe), ease: 'power3.out' });
+      }
+    }
+
+    /* ── Zustände ────────────────────────────────────────────── */
+    // Erst wegnehmen, was nicht mehr gilt, dann setzen — sonst
+    // räumt eine Klasse, die zwei Slides teilen, sich selbst weg.
+    function bgSetzen(i) {
+      if (!bgs.length) return;
+      var aktiv = (bgKlassen[i] || '').split(/\s+/).filter(Boolean);
+      bgs.forEach(function (el) {
+        bgKlassen.forEach(function (k, idx) {
+          if (idx === i || !k) return;
+          k.split(/\s+/).forEach(function (c) {
+            if (c && aktiv.indexOf(c) < 0) el.classList.remove(c);
+          });
+        });
+        aktiv.forEach(function (c) { el.classList.add(c); });
+        el.setAttribute('data-tabs-bg-active', ids[i]);
+      });
+    }
+
+    function navZustand(i) {
+      if (!hatNav) return;
+      buttons.forEach(function (b, k) {
+        b.toggleAttribute('data-active', k === i);
+        b.setAttribute('aria-selected', k === i ? 'true' : 'false');
+        b.tabIndex = k === i ? 0 : -1;
+      });
+    }
+
+    function inhaltZustand(i) {
+      slides.forEach(function (s, k) { s.toggleAttribute('data-active', k === i); });
+      (panels.length ? panels : slides).forEach(function (s, k) {
+        s.toggleAttribute('data-active', k === i);
+        s.setAttribute('aria-hidden', k === i ? 'false' : 'true');
+      });
+    }
+
+    function plop() {
+      if (weich.matches || !hatNav) return;
+      gsap.killTweensOf(stauch);
+      gsap.timeline()
+        .to(stauch, { v: 0.9, duration: CFG.stauchen, ease: 'power2.out', onUpdate: zeichnen })
+        .to(stauch, { v: 1,   duration: CFG.zurueck,  ease: 'back.out(1.7)', onUpdate: zeichnen });
+    }
+
+    var gemeldet = -1;
+    function ruhe() {
+      // Solange der Finger drauf ist oder der Schwung noch läuft,
+      // wird nichts korrigiert. Genau das hat Safari das Zurück-
+      // scrollen abgewürgt: das Skript hat zurückgezogen, während
+      // der Nutzer noch zog.
+      if (beruehrt) return;
+      var i = klemm(Math.round(rohZiel));
+      if (Math.abs(rohZiel - i) > 0.02) {
+        clearTimeout(korrekturT);
+        korrekturT = setTimeout(function () {
+          if (beruehrt || gefuehrt) return;
+          var f = bruch(), j = klemm(Math.round(f));
+          if (Math.abs(f - j) > 0.02) springen(j, true);
+        }, 280);
+        return;
+      }
+      clearTimeout(korrekturT);
+      anker = i;
+      blendZu(i);
+      if (i === gemeldet) return;
+      gemeldet = i;
+      plop();
+      document.dispatchEvent(new CustomEvent('tabs:change', {
+        detail: { name: name, index: i, id: ids[i] }
+      }));
+    }
+
+    /* ── Punkte ──────────────────────────────────────────────── */
+    var vorlage = null, dotKlasse = '', dotKlassen = [], punkte = [], dotAktiv = -1;
+    var reihe = null, schritt = 0, reiheAlt = null;
+
+    function punkteBauen() {
+      if (!dotsBox) return;
+      dotKlasse = dotsBox.getAttribute('data-tabs-dot-class') || '';
+      dotKlassen = dotKlasse.split(/\s+/).filter(Boolean);
+      if (!vorlage) {
+        var erst = dotsBox.querySelector('[data-tabs-dot]');
+        if (erst) {
+          vorlage = erst.cloneNode(true);
+          vorlage.setAttribute('data-tabs-dot', '');
+          dotKlassen.forEach(function (c) { vorlage.classList.remove(c); });
+        }
+      }
+      dotsBox.innerHTML = '';
+      punkte = [];
+      dotAktiv = -1;
+      reiheAlt = null;
+
+      // Eine eigene Ebene für die Reihe: verschoben wird sie, nicht der
+      // Halter — den bespielt GSAP (Einblenden, Skalieren). Zwei
+      // Schreiber auf demselben transform vertragen sich nicht.
+      // Die Reihe erbt Flex, Gap und Ausrichtung aus dem Designer.
+      reihe = document.createElement('div');
+      reihe.style.cssText = 'display:inherit;flex-direction:inherit;align-items:inherit;'
+                          + 'justify-content:inherit;gap:inherit;will-change:transform';
+      dotsBox.appendChild(reihe);
+
+      slides.forEach(function (_, i) {
+        var p;
+        if (vorlage) { p = vorlage.cloneNode(true); }
+        else {
+          p = document.createElement('button');
+          p.type = 'button'; p.className = 'tb-dot';
+          p.setAttribute('data-tabs-dot', '');
+        }
+        p.setAttribute('aria-label', 'Slide ' + (i + 1));
+        if (p.tagName !== 'BUTTON' && !p.hasAttribute('role')) p.setAttribute('role', 'button');
+        p.style.cursor = 'pointer';
+        p.addEventListener('click', function () { springen(i); });
+        reihe.appendChild(p);
+        punkte.push(p);
+      });
+      gsap.set(dotsBox, { xPercent: -50, yPercent: -50, autoAlpha: 0, scale: 0.9 });
+    }
+
+    // Vom aktiven Punkt aus nach beiden Seiten kleiner und blasser.
+    // Weil die Reihe den aktiven in die Mitte schiebt, ist das
+    // zugleich groß in der Mitte und klein an den Rändern.
+    function punktGroesse(d) { return Math.max(dotMin, 1 - d * dotAbfall); }
+    function punktDeckung(d) { return Math.max(0.25, 1 - d * dotAbfall * 1.2); }
+
+    function punkteMalen(f) {
+      if (!punkte.length) return;
+      var aktiv = klemm(Math.round(f));
+      var wechsel = aktiv !== dotAktiv;
+
+      if (zentriert && reihe && schritt) {
+        var off = Math.round(((punkte.length - 1) / 2 - f) * schritt * 10) / 10;
+        if (off !== reiheAlt) { reihe.style.transform = 'translate3d(' + off + 'px,0,0)'; reiheAlt = off; }
+      }
+
+      for (var k = 0; k < punkte.length; k++) {
+        var p = punkte[k], d = Math.abs(k - f);
+        var s = Math.round(punktGroesse(d) * 1000) / 1000;
+        var o = Math.round(punktDeckung(d) * 1000) / 1000;
+        if (p._tabsS !== s) { p.style.transform = 'scale(' + s + ')'; p._tabsS = s; }
+        if (p._tabsO !== o) { p.style.opacity = o; p._tabsO = o; }
+        if (!wechsel) continue;
+        var an = k === aktiv;
+        p.setAttribute('data-tabs-dot', an ? 'aktiv' : '');
+        p.setAttribute('aria-current', an ? 'true' : 'false');
+        for (var c = 0; c < dotKlassen.length; c++) p.classList.toggle(dotKlassen[c], an);
+      }
+      dotAktiv = aktiv;
+    }
+
+    /* ── Pille: Ruheinhalt ⇄ Punkte ──────────────────────────── */
+    function pillZiel() {
+      if (!pill) return 0;
+      if (gleitet) return breiteDots;
+      return breitenIdle[idleProSlide ? idleIndex : 0] || breiteDots;
+    }
+
+    function pillMorph(sofort) {
+      if (!pill) return;
+      var w = pillZiel();
+      if (!w) return;
+      gsap.killTweensOf(pill);
+      if (sofort) gsap.set(pill, { width: w });
+      else gsap.to(pill, { width: w, duration: dur(morphDauer), ease: 'power3.out' });
+    }
+
+    // Ruheinhalt der aktiven Slide. Stehen gerade die Punkte, wird
+    // nur umgehängt — sichtbar wird der neue Text erst beim Zurück.
+    function idleZu(i, sofort) {
+      if (!idleProSlide) return;
+      var neu = klemm(i);
+      if (neu === idleIndex && !sofort) return;
+      var vor = idleIndex;
+      idleIndex = neu;
+      if (gleitet) {
+        idles.forEach(function (el) { gsap.killTweensOf(el); gsap.set(el, { autoAlpha: 0 }); });
+        return;
+      }
+      idles.forEach(function (el, k) {
+        if (k === neu || k === vor) return;
+        gsap.killTweensOf(el);
+        gsap.set(el, { autoAlpha: 0 });
+      });
+      var d = sofort ? 0 : dur(swapDauer);
+      if (idles[vor] && vor !== neu) {
+        gsap.killTweensOf(idles[vor]);
+        gsap.to(idles[vor], { autoAlpha: 0, scale: 0.96, duration: d * 0.5, ease: 'power2.out' });
+      }
+      if (idles[neu]) {
+        gsap.killTweensOf(idles[neu]);
+        gsap.fromTo(idles[neu],
+          { autoAlpha: 0, scale: sofort ? 1 : 0.96 },
+          { autoAlpha: 1, scale: 1, duration: d, ease: 'power2.out', delay: sofort ? 0 : d * 0.35 });
+      }
+      pillMorph(sofort);
+    }
+
+    function idleMalen(sofort) {
+      if (!idles.length) return;
+      var sicht = idleProSlide ? idleIndex : 0;
+      var d = sofort ? 0 : dur(swapDauer);
+      idles.forEach(function (el, k) {
+        gsap.killTweensOf(el);
+        var an = !gleitet && k === sicht;
+        if (sofort) { gsap.set(el, { autoAlpha: an ? 1 : 0, scale: 1 }); return; }
+        if (an) gsap.to(el, { autoAlpha: 1, scale: 1, duration: d, ease: 'back.out(1.8)', delay: d * 0.2 });
+        else gsap.to(el, { autoAlpha: 0, scale: 0.94, duration: d * 0.6, ease: 'power2.out' });
+      });
+    }
+
+    function gleitAn(fest) {
+      clearTimeout(dotT);
+      if (!fest) dotT = setTimeout(gleitAus, halten);
+      if (gleitet) return;
+      gleitet = true;
+      if (dotsBox) {
+        punkteMalen(rohWeich);
+        dotsBox.setAttribute('data-tabs-live', '');
+        gsap.killTweensOf(dotsBox);
+        gsap.to(dotsBox, { autoAlpha: 1, scale: 1, duration: dur(swapDauer), ease: 'back.out(2)', delay: dur(swapDauer * 0.2) });
+      }
+      idleMalen();
+      pillMorph();
+    }
+
+    function gleitAus() {
+      if (!gleitet || hovert) return;
+      gleitet = false;
+      if (dotsBox) {
+        dotsBox.removeAttribute('data-tabs-live');
+        gsap.killTweensOf(dotsBox);
+        gsap.to(dotsBox, { autoAlpha: 0, scale: 0.9, duration: dur(swapDauer * 0.6), ease: 'power2.out' });
+      }
+      idleMalen();
+      pillMorph();
+    }
+
+    if (pill && hoverAn) {
+      pill.addEventListener('mouseenter', function () {
+        hovert = true;
+        gleitAn(true);           // bleibt stehen, solange der Zeiger draufliegt
+      });
+      pill.addEventListener('mouseleave', function () {
+        hovert = false;
+        clearTimeout(dotT);
+        dotT = setTimeout(gleitAus, dur(CFG.hoverAus) * 1000);
+      });
+    }
+
+    /* ── Springen ────────────────────────────────────────────────
+       Nicht der Track wird getweent, sondern ein Zwischenwert —
+       daraus wird scrollLeft geschrieben. Zwei Gründe, beide auf
+       dem Handy entscheidend: gelesene Scrollpositionen sind dort
+       auf ganze Gerätepixel gerundet und kommen verzögert, und
+       Scroll-Snap rastet während des Tweens ständig dazwischen. */
+    function navEigenWeg() {
+      if (!navEigen) return;
+      navEigen.kill();
+      navEigen = null;
+    }
+    function snapAus() { track.style.scrollSnapType = 'none'; }
+    function snapAn()  { if (!zieh.an) track.style.scrollSnapType = ''; }
+    function fuehrungWeg() {
+      gsap.killTweensOf(fuehr);
+      if (gefuehrt) { gefuehrt = false; snapAn(); }
+    }
+    function posAus(f) {
+      var i0 = Math.max(0, Math.floor(f)), i1 = Math.min(ziele.length - 1, Math.ceil(f));
+      return mix(ziele[i0], ziele[i1], f - i0);
+    }
+
+    function springen(i, still) {
+      i = klemm(i);
+      fuehrungWeg();
+      gsap.killTweensOf(track);
+      if (!still) gleitAn();
+
+      if (weich.matches) {
+        track.scrollLeft = ziele[i];
+        jagen(); ruhe();
+        return;
+      }
+
+      var dir = ziele[i] >= track.scrollLeft ? 1 : -1;
+      gefuehrt = true;
+      fuehr.v = fuehrF = bruch();
+      snapAus();
+      gsap.to(fuehr, {
+        v: i,
+        duration: still ? reise * 0.85 : reise,
+        ease: reiseKurve,
+        onUpdate: function () {
+          fuehrF = fuehr.v;
+          track.scrollLeft = posAus(fuehrF);
+          jagen();
+        },
+        onInterrupt: function () { gefuehrt = false; snapAn(); },
+        onComplete: function () {
+          fuehrF = i;
+          track.scrollLeft = ziele[i];
+          gefuehrt = false;
+          snapAn();
+          jagen(); ruhe();
+        }
+      });
+
+      // Die Pille bekommt einen eigenen Tween auf denselben Zielindex.
+      // Damit darf sie länger brauchen als der Track, früher ankommen
+      // oder anders beschleunigen — sie hängt nicht mehr an dessen Kurve.
+      if (navEigenAn && hatNav) {
+        navEigenWeg();
+        navProxy.v = navWeich;
+        navEigen = gsap.to(navProxy, {
+          v: i,
+          duration: still ? navDauer * 0.85 : navDauer,
+          ease: navKurve,
+          onUpdate: function () { navWeich = navProxy.v; zeichnen(); },
+          onComplete: function () { navEigen = null; navWeich = navZiel; zeichnen(); }
+        });
+      }
+
+      if (!still && hatNav && rects.length) {
+        // Der Platz links und rechts entscheidet gemeinsam: sonst
+        // schwingt die Pille nur in die Richtung über, in der noch
+        // Luft ist, und die andere wirkt zäh.
+        var r = rects[i];
+        var cs = getComputedStyle(nav);
+        var innen = nav.clientWidth - (parseFloat(cs.paddingRight) || 0);
+        var links = Math.max(0, r.left - (parseFloat(cs.paddingLeft) || 0));
+        var rechts = Math.max(0, innen - (r.left + r.width));
+        var o = dir * Math.min(CFG.ueberschwung, links, rechts);
+        gsap.killTweensOf(schub);
+        gsap.timeline()
+          .to(schub, { v: o, duration: reise * 0.6, ease: 'power2.out', onUpdate: zeichnen })
+          .to(schub, { v: 0, duration: 0.32, ease: 'power2.inOut', onUpdate: zeichnen });
+      }
+    }
+
+    /* ── Ghost ───────────────────────────────────────────────── */
+    function ghostZu(b) {
+      if (!ghost) return;
+      var z = { x: b.offsetLeft, y: b.offsetTop, width: b.offsetWidth, height: b.offsetHeight };
+      if (!ghostAn) {
+        ghostAn = true;
+        gsap.killTweensOf(ghost);
+        gsap.set(ghost, z);
+        gsap.to(ghost, { autoAlpha: 1, duration: dur(0.25), ease: 'power2.out' });
+      } else {
+        gsap.to(ghost, Object.assign({ autoAlpha: 1, duration: dur(0.3), ease: 'power3.out' }, z));
+      }
+    }
+    function ghostWeg() {
+      if (!ghost) return;
+      ghostAn = false;
+      gsap.to(ghost, { autoAlpha: 0, duration: dur(0.2), ease: 'power1.out' });
+    }
+
+    /* ── Binden ──────────────────────────────────────────────── */
+    // Wer anfasst, hat Vorrang: ein laufender Tween auf dem Track
+    // wird sofort abgeworfen, und bis der Schwung ausgelaufen ist
+    // rührt das Skript die Scrollposition nicht an.
+    function fingerAn() {
+      beruehrt = true;
+      fuehrungWeg();
+      navEigenWeg();
+      clearTimeout(beruehrtT);
+      clearTimeout(korrekturT);
+      gsap.killTweensOf(track);
+      gleitAn();
+    }
+    function fingerAus(frist) {
+      clearTimeout(beruehrtT);
+      beruehrtT = setTimeout(function () { beruehrt = false; ruhe(); }, frist);
+    }
+
+    ['pointerdown', 'touchstart'].forEach(function (ev) {
+      track.addEventListener(ev, fingerAn, { passive: true });
+    });
+    ['pointerup', 'pointercancel', 'touchend', 'touchcancel'].forEach(function (ev) {
+      track.addEventListener(ev, function () { fingerAus(420); }, { passive: true });
+    });
+    // Trackpads haben keinen Aufsetzpunkt — hier zählt nur der Nachlauf.
+    track.addEventListener('wheel', function () {
+      if (gesperrt) return;
+      beruehrt = true;
+      clearTimeout(korrekturT);
+      gsap.killTweensOf(track);
+      gleitAn();
+      fingerAus(260);
+    }, { passive: true });
+
+    /* ── Ziehen mit der Maus ─────────────────────────────────────
+       Touch macht der Browser selbst, hier geht es nur um den
+       Zeiger. Während des Ziehens muss Scroll-Snap aus, sonst
+       zerrt es bei jedem Pixel zurück in die Rastung. */
+    function sperrePruefen() {
+      gesperrt = sperreAus && mqDesk.matches;
+      track.toggleAttribute('data-tabs-locked', gesperrt);
+      track.toggleAttribute('data-tabs-grab', !gesperrt && ziehenAn && mqDesk.matches);
+      if (gesperrt && zieh.an) ziehEnde();
+    }
+
+    function ziehStart(e) {
+      if (gesperrt || !ziehenAn || zieh.an) return;
+      if (e.pointerType === 'touch' || e.button !== 0) return;
+      zieh.an = true;
+      zieh.x = zieh.letztX = e.clientX;
+      zieh.letztT = e.timeStamp;
+      zieh.v = 0;
+      zieh.weg = 0;
+      zieh.start = track.scrollLeft;
+      zieh.index = klemm(Math.round(bruch()));
+      track.setAttribute('data-tabs-grabbing', '');
+      track.style.scrollSnapType = 'none';
+      try { track.setPointerCapture(e.pointerId); } catch (x) {}
+      fingerAn();
+    }
+
+    function ziehLauf(e) {
+      if (!zieh.an) return;
+      var dx = e.clientX - zieh.x;
+      zieh.weg = Math.max(zieh.weg, Math.abs(dx));
+      var dt = e.timeStamp - zieh.letztT;
+      if (dt > 0) zieh.v = (e.clientX - zieh.letztX) / dt;   // px/ms
+      zieh.letztX = e.clientX;
+      zieh.letztT = e.timeStamp;
+      track.scrollLeft = zieh.start - dx;
+      e.preventDefault();
+    }
+
+    function ziehEnde() {
+      if (!zieh.an) return;
+      zieh.an = false;
+      track.removeAttribute('data-tabs-grabbing');
+      track.style.scrollSnapType = '';
+
+      var nah = klemm(Math.round(bruch()));
+      var ziel = nah;
+      if (nah === zieh.index) {
+        // Nicht weit genug gekommen: Wurf und Weg entscheiden.
+        var weit = Math.abs(track.scrollLeft - zieh.start) > track.clientWidth * CFG.wurfWeg;
+        var wurf = Math.abs(zieh.v) > CFG.wurf;
+        if (weit || wurf) {
+          var richtung = zieh.v ? (zieh.v < 0 ? 1 : -1) : (track.scrollLeft > zieh.start ? 1 : -1);
+          ziel = klemm(zieh.index + richtung);
+        }
+      }
+      beruehrt = false;
+      springen(ziel, true);
+    }
+
+    if (ziehenAn) {
+      track.addEventListener('pointerdown', ziehStart);
+      track.addEventListener('pointermove', ziehLauf, { passive: false });
+      ['pointerup', 'pointercancel'].forEach(function (ev) {
+        track.addEventListener(ev, ziehEnde);
+        window.addEventListener(ev, ziehEnde);
+      });
+      // Nach dem Ziehen darf der Klick nicht durchschlagen
+      track.addEventListener('click', function (e) {
+        if (zieh.weg > 5) { e.preventDefault(); e.stopPropagation(); zieh.weg = 0; }
+      }, true);
+    }
+
+    sperrePruefen();
+    if (mqDesk.addEventListener) mqDesk.addEventListener('change', sperrePruefen);
+    else if (mqDesk.addListener) mqDesk.addListener(sperrePruefen);
+
+    track.addEventListener('scroll', function () {
+      gleitAn();
+      jagen();
+      clearTimeout(endeT);
+      endeT = setTimeout(ruhe, 140);
+    }, { passive: true });
+
+    if (hatNav) {
+      buttons.forEach(function (b, i) {
+        if (!b.id) b.id = 'tabs-' + name + '-btn-' + i;
+        var s = panels.length ? panels[i] : slides[i];
+        if (!s.id) s.id = 'tabs-' + name + '-panel-' + i;
+        b.setAttribute('role', 'tab');
+        b.setAttribute('aria-controls', s.id);
+        s.setAttribute('role', 'tabpanel');
+        s.setAttribute('aria-labelledby', b.id);
+        b.addEventListener('click', function () { springen(i); });
+        b.addEventListener('mouseenter', function () { ghostZu(b); });
+      });
+      nav.setAttribute('role', 'tablist');
+      nav.addEventListener('mouseleave', ghostWeg);
+      nav.addEventListener('keydown', function (e) {
+        var n = null, a = klemm(Math.round(rohZiel));
+        if (e.key === 'ArrowRight') n = Math.min(slides.length - 1, a + 1);
+        if (e.key === 'ArrowLeft')  n = Math.max(0, a - 1);
+        if (e.key === 'Home') n = 0;
+        if (e.key === 'End')  n = slides.length - 1;
+        if (n === null || n === a) return;
+        e.preventDefault();
+        springen(n);
+        if (buttons[n]) buttons[n].focus();
+      });
+    }
+
+    track.setAttribute('tabindex', '0');
+    track.addEventListener('keydown', function (e) {
+      var a = klemm(Math.round(rohZiel));
+      if (e.key === 'ArrowRight') { e.preventDefault(); springen(a + 1); }
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); springen(a - 1); }
+    });
+
+    function frisch() {
+      var vorher = klemm(Math.round(rohZiel));
+      var alt = ziele.slice();
+      messen();
+      // Nur zurücksetzen, wenn sich das Layout wirklich verschoben
+      // hat — nicht bei jeder Höhenänderung, die wir selbst tweenen.
+      var verschoben = ziele.some(function (z, i) { return Math.abs(z - (alt[i] === undefined ? z : alt[i])) > 0.5; });
+      if (verschoben && !beruehrt && !gefuehrt) track.scrollLeft = ziele[vorher];
+      rohZiel = rohWeich = bruch();
+      anker = klemm(Math.round(rohZiel));
+      navEigenWeg();
+      navZiel = navWeich = tor(rohZiel, navTor, anker);
+      iAlt.t = ''; iAlt.w = iAlt.h = hAlt = -1;   // gemessen wurde neu, also gilt nichts Gespeichertes
+      zeichnen();
+      pillMorph(true);
+      if (!live && autoHoehe && hoehen.length && !gsap.isTweening(panelsWrap || track)) {
+        gsap.set(panelsWrap || track, { height: hoehen[klemm(blendIndex)] });
+      }
+    }
+
+    function frischGleich() {
+      clearTimeout(roT);
+      roT = setTimeout(function () { if (!beruehrt && !zieh.an) frisch(); }, 140);
+    }
+
+    if (typeof ResizeObserver !== 'undefined') {
+      var ro = new ResizeObserver(frischGleich);
+      ro.observe(track);
+      slides.forEach(function (s) { ro.observe(s); });
+      panels.forEach(function (p) { ro.observe(p); });
+    }
+    // resize feuert im Dutzend pro Sekunde — messen ist teuer,
+    // also einmal am Ende statt zwanzigmal währenddessen.
+    window.addEventListener('resize', frischGleich);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(frisch);
+
+    /* ── Start ───────────────────────────────────────────────── */
+    if (ghost) gsap.set(ghost, { autoAlpha: 0 });
+    punkteBauen();
+
+    var start = slides.findIndex(function (s) { return s.hasAttribute('data-active'); });
+    if (start < 0 && hatNav) start = buttons.findIndex(function (b) { return b.hasAttribute('data-active'); });
+    if (start < 0) start = 0;
+
+    idleIndex = start;
+    messen();
+    idleMalen(true);
+    pillMorph(true);
+
+    track.scrollLeft = ziele[start];
+    rohZiel = rohWeich = start;
+    navZiel = navWeich = start;
+    navIndex = gemeldet = start;
+    anker = start;
+    navZustand(start);
+    blendZu(start, true);
+    zeichnen();
+
+    // Beim Seitenaufruf stehen erst die Punkte — sie sagen dem Nutzer
+    // in einem Blick, dass hier etwas zu wischen ist. Danach morpht
+    // die Pille in den Ruheinhalt, mit demselben Wechsel wie sonst.
+    // Fasst jemand vorher an, übernimmt der normale Halte-Timer.
+    if (intro > 0 && dotsBox && slides.length > 1) {
+      gleitet = true;
+      punkteMalen(rohWeich);
+      dotsBox.setAttribute('data-tabs-live', '');
+      gsap.set(dotsBox, { autoAlpha: 1, scale: 1 });
+      idleMalen(true);
+      pillMorph(true);
+      clearTimeout(dotT);
+      dotT = setTimeout(gleitAus, intro);
+    }
+
+    return {
+      name: name,
+      to: function (i) { springen(i); },
+      next: function () { springen(klemm(Math.round(rohZiel)) + 1); },
+      prev: function () { springen(klemm(Math.round(rohZiel)) - 1); },
+      refresh: frisch
+    };
+  }
+
+  function start() {
+    qq(document, '[data-tabs]').forEach(function (root) {
+      if (root.dataset.tabsBound) return;
+      root.dataset.tabsBound = '1';
+      var inst = bauen(root);
+      if (inst) instanzen.push(inst);
+    });
+    if (!instanzen.length) console.warn('[Tabs] Kein [data-tabs] auf der Seite gefunden.');
+  }
+
+  var finden = function (n) {
+    return instanzen.filter(function (i) { return i.name === n; })[0] || instanzen[0];
+  };
+
+  window.Tabs = {
+    to:      function (n, i) { var t = finden(n); if (t) t.to(i); },
+    next:    function (n) { var t = finden(n); if (t) t.next(); },
+    prev:    function (n) { var t = finden(n); if (t) t.prev(); },
+    refresh: function () { instanzen.forEach(function (t) { t.refresh(); }); }
+  };
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
+})();
