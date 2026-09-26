@@ -1,0 +1,79 @@
+<style>
+  html.lenis { height: auto; }
+  .lenis.lenis-smooth { scroll-behavior: auto; }
+  .lenis.lenis-smooth [data-lenis-prevent] { overscroll-behavior: contain; }
+  .lenis.lenis-stopped { overflow: hidden; }
+</style>
+
+<style>
+  /* SheetNav — Zwischenlösung, bis der korrigierte Embed drin ist. */
+  [data-sheet]:has([data-sheetnav-page][data-sheetnav-active]) { height: 98dvh; }
+  [data-sheetnav]:has([data-sheetnav-page][data-sheetnav-active]) {
+    flex: 1 1 auto; height: auto; min-height: 0;
+  }
+  [data-sheetnav] [data-sheetnav-root] > *:not([data-sheetnav-fixed]) {
+    transition: opacity var(--sheetnav-dur, .32s) var(--sheetnav-ease, ease);
+  }
+</style>
+
+<script>
+/* SheetNav — Zwischenlösung: Rückfahrt sofort aufhellen. */
+(function () {
+  'use strict';
+  var A = 'data-sheetnav';
+  function dauer(stage) {
+    var v = getComputedStyle(stage).getPropertyValue('--sheetnav-dur').trim();
+    if (/ms$/.test(v)) return parseFloat(v);
+    if (/s$/.test(v))  return parseFloat(v) * 1000;
+    return 320;
+  }
+  document.addEventListener('sheetnav:back', function (e) {
+    var seite = document.querySelector('[' + A + '-page="' + e.detail.page + '"]');
+    var stage = seite && seite.closest('[' + A + ']');
+    if (!stage) return;
+    stage.setAttribute(A + '-undim', '');
+    setTimeout(function () { stage.removeAttribute(A + '-undim'); }, dauer(stage) + 60);
+  });
+  document.addEventListener('sheetnav:open', function (e) {
+    var seite = document.querySelector('[' + A + '-page="' + e.detail.page + '"]');
+    var stage = seite && seite.closest('[' + A + ']');
+    if (stage) stage.removeAttribute(A + '-undim');
+  });
+})();
+</script>
+
+<script>
+/* SheetNav — Felder leeren.
+   Opt-out: data-sheetnav-keep-values auf der Seite oder einem Vorfahren. */
+(function () {
+  'use strict';
+  var A = 'data-sheetnav';
+  function leeren(bereich) {
+    if (!bereich) return;
+    if (bereich.closest('[data-sheetnav-keep-values]')) return;
+    [].slice.call(bereich.querySelectorAll('input, textarea, select'))
+      .forEach(function (f) {
+        var t = (f.type || '').toLowerCase();
+        if (t === 'button' || t === 'submit' || t === 'hidden') return;
+        if (t === 'checkbox' || t === 'radio') f.checked = f.defaultChecked;
+        else if (f.tagName === 'SELECT') f.selectedIndex = 0;
+        else f.value = '';
+        f.dispatchEvent(new Event('input',  { bubbles: true }));
+        f.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+  }
+  document.addEventListener('sheetnav:back', function (e) {
+    var seite = document.querySelector('[' + A + '-page="' + e.detail.page + '"]');
+    setTimeout(function () { leeren(seite); }, 420);
+  });
+  document.addEventListener('sheet:close', function () {
+    setTimeout(function () {
+      [].slice.call(document.querySelectorAll('[' + A + '-page]')).forEach(leeren);
+    }, 420);
+  });
+})();
+</script>
+
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Tablefy">

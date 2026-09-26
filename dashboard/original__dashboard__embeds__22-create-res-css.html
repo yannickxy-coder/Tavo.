@@ -1,0 +1,39 @@
+<style>
+/* Zustände — setzt das Skript als Klasse. Basis-Look steckt in den ns-Klassen im Designer. */
+.ns-root{font-family:Geist,system-ui,sans-serif}
+.ns-chip.is-on{background-color:#0d0d0d;color:#fff}
+.ns-chip.is-full{opacity:.55;color:#8c8c8c;text-decoration:line-through}
+.ns-chip.is-full.is-on{background-color:#c41f45;color:#fff;opacity:1;text-decoration:none}
+.ns-slots .ns-chip{grid-column-gap:5px;padding-left:0;padding-right:0}
+.ns-slot-group{grid-column:1/-1}
+.ns-chip.is-low .ns-slot-free{color:#b26b00}
+.ns-chip.is-on .ns-slot-free{color:rgba(255,255,255,.7)}
+.ns-chip.is-full .ns-slot-free{text-decoration:none}
+.ns-seg-opt.is-on{color:#0d0d0d}
+.ns-tag.is-on{background-color:#0d0d0d;color:#fff}
+.ns-step.is-off,.ns-step-plus.is-off{opacity:.35;cursor:default}
+.ns-btn-pri.is-off{opacity:1;cursor:default}
+.ns-btn-pri.is-warn{background-color:#c41f45}
+.ns-btn-pri.is-busy{opacity:.7;cursor:progress}
+.ns-avail::before{content:"";width:7px;height:7px;border-radius:999px;background-color:#0e7a55;flex:none}
+.ns-avail.is-bad{color:#c41f45}.ns-avail.is-bad::before{background-color:#c41f45}
+.ns-input,.ns-textarea,.ns-country-search{-webkit-appearance:none;appearance:none;outline:0}
+.ns-input.is-focus,.ns-textarea.is-focus{box-shadow:inset 0 0 0 1.5px #0d0d0d}
+.ns-input.is-invalid,.ns-textarea.is-invalid{box-shadow:inset 0 0 0 1.5px #c41f45}
+.ns-flabel.is-up{top:9px;font-size:12px;transform:none;color:#5c5c5c}
+.ns-flabel.is-top{top:22px;transform:none;font-size:14px}
+.ns-flabel.is-top.is-up{top:10px;font-size:12px}
+.ns-switch.is-checked{background-color:#2f5bff}
+.ns-switch.is-checked .ns-knob{transform:translateX(18px)}
+.ns-opt.is-off{cursor:default}
+.ns-opt.is-off .ns-switch{opacity:.5}
+.ns-prefix.is-on{box-shadow:inset 0 0 0 1.5px #0d0d0d}
+.ns-prefix.is-on .ns-prefix-chevron{transform:rotate(180deg)}
+.ns-prefix-chevron{transition:transform 200ms ease}
+.ns-country-opt.is-on,.ns-country-opt:hover{background-color:#fff}
+.ns-guest-apply:active,.ns-chip:active,.ns-tag:active{opacity:.8}
+[data-nr-walkin="show"]{display:none}
+/* Status-Chip: steckt im Embed data-tavo-status-chip-runtime (v3.1 mit Countdown) — hier nicht doppeln. */
+</style>
+<script>window.TAVO_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indpd2hic3p3a3Vla3hrZGlxY2dkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczNDQ4NzYsImV4cCI6MjEwMjkyMDg3Nn0.X4lLnTq0JjlLuS81-YMB-V2yBmw0fO2n0dcTgZ1k7Js";</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.min.js"></script>

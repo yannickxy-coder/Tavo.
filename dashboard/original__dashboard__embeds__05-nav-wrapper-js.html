@@ -1,0 +1,41 @@
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const SELECTOR = '.fixed-navbar-wrapper';        // Element(e), die die Klasse bekommen
+  const CLASS = 'is-scrolling-down';        // die eine Klasse
+  const threshold = 10;                     // Mindest-Scrollweg
+  const thresholdTop = 50;                  // erst ab hier aktiv
+
+  const elements = document.querySelectorAll(SELECTOR);
+  if (!elements.length) return;
+
+  let lastScrollTop = Math.max(window.scrollY, 0);
+  let latestScrollTop = lastScrollTop;
+  let ticking = false;
+  let isActive = null;
+
+  function setState(active) {
+    if (active === isActive) return;
+    elements.forEach((el) => el.classList.toggle(CLASS, active));
+    isActive = active;
+  }
+
+  function handleScroll() {
+    const now = Math.max(latestScrollTop, 0);
+    if (Math.abs(lastScrollTop - now) >= threshold) {
+      setState(now > lastScrollTop && now > thresholdTop);
+      lastScrollTop = now;
+    }
+    ticking = false;
+  }
+
+  setState(false);
+
+  window.addEventListener('scroll', () => {
+    latestScrollTop = window.scrollY;
+    if (!ticking) {
+      ticking = true;
+      window.requestAnimationFrame(handleScroll);
+    }
+  }, { passive: true });
+});
+</script>

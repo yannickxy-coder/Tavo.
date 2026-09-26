@@ -1,0 +1,191 @@
+<!-- Flip · GSAP kommt aus Webflow (3.15). Plugins in derselben Version
+     vom Webflow-CDN; registriert wird erst bei DOMContentLoaded. -->
+<script src="https://cdn.prod.website-files.com/gsap/3.15.0/Flip.min.js"></script>
+<script src="https://cdn.prod.website-files.com/gsap/3.15.0/CustomEase.min.js"></script>
+<script>
+function tavoFlipInit() {
+  "use strict";
+  if (window.__tavoFlipInit) return;
+  window.__tavoFlipInit = true;
+
+  if (!window.gsap || !window.Flip) return;
+
+  gsap.registerPlugin(Flip);
+
+  if (window.CustomEase) {
+    gsap.registerPlugin(CustomEase);
+    /* Eigener Name statt "elastic" — "elastic" ist in GSAP belegt. */
+    CustomEase.create(
+      "flip-elastic",
+      "M0,0 C0.0127,0.0956 0.0562,0.434 0.076,0.5737 C0.0958,0.7134 0.1077,0.7761 0.1187,0.8382 C0.1297,0.9003 0.1341,0.9145 0.1419,0.9463 C0.1497,0.9781 0.1574,1.0055 0.1654,1.0292 C0.1734,1.0529 0.1814,1.0725 0.1897,1.0886 C0.198,1.1047 0.2086,1.1177 0.2153,1.1258 C0.222,1.1339 0.2248,1.1342 0.2297,1.137 C0.2346,1.1398 0.2396,1.1415 0.2448,1.1424 C0.25,1.1433 0.2554,1.1433 0.261,1.1423 C0.2666,1.1413 0.2704,1.1409 0.2786,1.1366 C0.2868,1.1323 0.2922,1.1308 0.3101,1.1165 C0.328,1.1022 0.3669,1.0665 0.3862,1.0507 C0.4055,1.0349 0.4118,1.0304 0.4257,1.0219 C0.4397,1.0134 0.4548,1.0053 0.4699,0.9995 C0.485,0.9937 0.4967,0.9898 0.5163,0.9872 C0.5359,0.9846 0.5383,0.9819 0.5877,0.9842 C0.6371,0.9865 0.7439,0.9985 0.8126,1.0011 C0.8813,1.0037 0.9688,1.0002 1,1"
+    );
+  }
+
+  const DEFAULT_DURATION = 0.5;
+  const DEFAULT_EASE = "power2.inOut";
+  const DEFAULT_CLASS = "is-open";
+  const DEFAULT_CLASS_TIMING = "move";
+  const CLASS_TIMINGS = ["click", "move", "complete"];
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+  const number = (value, fallback) => {
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+
+  const initGroup = (root) => {
+    const scope = root === document ? document : root;
+    const trigger = scope.querySelector("[data-flip-trigger]");
+    const items = [...scope.querySelectorAll("[data-flip-item]")];
+    if (!trigger || !items.length) return;
+
+    let isOpen = false;
+    let calls = [];
+
+    const triggerDuration = () => number(trigger.getAttribute("data-flip-duration"), DEFAULT_DURATION);
+    const triggerEase = () => trigger.getAttribute("data-flip-ease") || DEFAULT_EASE;
+    const durationOf = (element) => Math.max(0, number(element.getAttribute("data-flip-duration"), triggerDuration()));
+    const easeOf = (element) => element.getAttribute("data-flip-ease") || triggerEase();
+    const delayOf = (element, open) => {
+      const attribute = open ? "data-flip-delay-open" : "data-flip-delay-close";
+      const own = parseFloat(element.getAttribute(attribute));
+      if (Number.isFinite(own)) return Math.max(0, own);
+      return Math.max(0, number(trigger.getAttribute(attribute), 0));
+    };
+    const radiusOf = (item, open) => item.getAttribute(open ? "data-flip-radius-open" : "data-flip-radius-close");
+    const containerOf = (name) => scope.querySelector(`[data-flip-container="${name}"]`);
+
+    const toggleClassName = () => trigger.getAttribute("data-flip-class") || DEFAULT_CLASS;
+    const classTiming = () => {
+      const value = trigger.getAttribute("data-flip-class-timing") || DEFAULT_CLASS_TIMING;
+      return CLASS_TIMINGS.includes(value) ? value : DEFAULT_CLASS_TIMING;
+    };
+    const classTargets = () => {
+      const targets = [...scope.querySelectorAll("[data-flip-class-target]")];
+      return targets.length ? targets : [trigger];
+    };
+
+    const toggleClasses = (open) => {
+      const className = toggleClassName();
+      classTargets().forEach((element) => {
+        const delay = delayOf(element, open);
+        const duration = durationOf(element);
+        const ease = easeOf(element);
+        const apply = () => {
+          if (reducedMotion.matches || duration === 0) {
+            element.classList.toggle(className, open);
+            return;
+          }
+          const state = Flip.getState([element, ...element.children]);
+          element.classList.toggle(className, open);
+          Flip.from(state, { duration, ease, absolute: false, prune: true });
+        };
+        if (delay > 0) calls.push(gsap.delayedCall(delay, apply));
+        else apply();
+      });
+    };
+    const toggleClassesAt = (timing, open) => {
+      if (classTiming() !== timing) return;
+      toggleClasses(open);
+    };
+
+    const cancelPending = () => {
+      calls.forEach((call) => call.kill());
+      calls = [];
+    };
+    const clearFlipProps = (item) => {
+      gsap.killTweensOf(item);
+      gsap.set(item, { clearProps: "position,top,left,width,height,transform" });
+    };
+
+    const moveItems = (open) => {
+      cancelPending();
+      trigger.setAttribute("aria-expanded", String(open));
+      toggleClassesAt("click", open);
+
+      const planned = items.map((item) => {
+        const source = containerOf(item.getAttribute("data-flip-source") || "source");
+        const target = containerOf(item.getAttribute("data-flip-target") || "target");
+        const destination = open ? target : source;
+        if (!destination) return null;
+        if (item.parentElement === destination) return null;
+        return {
+          item, destination,
+          delay: delayOf(item, open),
+          duration: durationOf(item),
+          ease: easeOf(item),
+          radius: radiusOf(item, open)
+        };
+      }).filter(Boolean);
+
+      if (!planned.length) {
+        if (classTiming() !== "click") toggleClasses(open);
+        isOpen = open;
+        return;
+      }
+
+      if (reducedMotion.matches) {
+        planned.forEach(({ item, destination, radius }) => {
+          clearFlipProps(item);
+          destination.appendChild(item);
+          if (radius !== null) item.style.borderRadius = radius;
+        });
+        if (classTiming() !== "click") toggleClasses(open);
+        isOpen = open;
+        return;
+      }
+
+      let moveClassFired = false;
+      const runItem = (entry) => {
+        const { item, destination, duration, ease, radius } = entry;
+        if (!moveClassFired && classTiming() === "move") {
+          moveClassFired = true;
+          toggleClasses(open);
+        }
+        const state = Flip.getState(item);
+        clearFlipProps(item);
+        destination.appendChild(item);
+        const flip = Flip.from(state, { targets: item, duration, ease, absolute: true, prune: true });
+        if (radius !== null) flip.to(item, { borderRadius: radius, duration, ease }, 0);
+      };
+
+      planned.forEach((entry) => {
+        if (entry.delay > 0) calls.push(gsap.delayedCall(entry.delay, () => runItem(entry)));
+        else runItem(entry);
+      });
+
+      const total = planned.reduce((max, entry) => Math.max(max, entry.delay + entry.duration), 0);
+      calls.push(gsap.delayedCall(total, () => {
+        toggleClassesAt("complete", open);
+        gsap.set(items, { clearProps: "transform" });
+      }));
+
+      isOpen = open;
+    };
+
+    trigger.setAttribute("aria-expanded", "false");
+    if (!trigger.matches("button, a, [role]")) {
+      trigger.setAttribute("role", "button");
+      if (!trigger.hasAttribute("tabindex")) trigger.setAttribute("tabindex", "0");
+    }
+    trigger.addEventListener("click", () => moveItems(!isOpen));
+    trigger.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      moveItems(!isOpen);
+    });
+  };
+
+  const boot = () => {
+    const groups = document.querySelectorAll("[data-flip-group]");
+    if (groups.length) groups.forEach(initGroup);
+    else initGroup(document);
+  };
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
+}
+
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", tavoFlipInit);
+else tavoFlipInit();
+</script>

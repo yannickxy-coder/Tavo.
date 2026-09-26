@@ -1,0 +1,55 @@
+<style>
+/* tavo — Offline-Hinweis: unsichtbar, solange alles live ist (nicht im Designer) */
+[data-tavo-offline]{transition:opacity .25s ease,transform .25s ease,visibility 0s linear .25s}
+[data-tavo-offline].is-offline{transition:opacity .25s ease,transform .25s ease,visibility 0s}
+html:not(.wf-design-mode) [data-tavo-offline]:not(.is-offline){opacity:0;visibility:hidden;pointer-events:none;transform:translateY(-8px)}
+</style>
+<script>
+/* tavo — Offline-Hinweis v1
+   [data-tavo-offline] (Chip) · darin optional [data-tavo-offline-text]
+   Erscheint (Klasse is-offline), wenn das Gerät offline ist oder die Live-
+   Verbindung fehlt und seit über 60 s keine frischen Daten kamen.
+   Text: „Offline · Stand 17:12" bzw. „Keine Live-Verbindung · Stand 17:12".
+   Tippen lädt neu. Kommt das Netz zurück, wird sofort neu geladen. */
+(function () {
+  'use strict';
+  var last = 0, bad = 0, STALE = 60000, HOLD = 4000;
+  document.addEventListener('tavo:data', function () { last = Date.now(); });
+  function live() {
+    var db = window.tavoDB;
+    try {
+      if (!db || !db.realtime) return true;
+      if (db.realtime.isConnected && !db.realtime.isConnected()) return false;
+      var ch = (db.getChannels ? db.getChannels() : []).filter(function (c) { return /realtime:res-/.test(c.topic || ''); });
+      return !ch.length || ch.some(function (c) { return c.state === 'joined'; });
+    } catch (e) { return true; }
+  }
+  function stand() {
+    if (!last) return '';
+    var k = window.tavoReservierungen && window.tavoReservierungen.kit;
+    var d = k ? k.wall(last) : new Date(last);
+    return ' · Stand ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+  }
+  function check() {
+    var el = document.querySelector('[data-tavo-offline]');
+    if (!el || !(window.tavoStore && window.tavoStore.ready) && navigator.onLine) return;
+    var off = !navigator.onLine, stale = !live() && Date.now() - last > STALE;
+    if (off || stale) { if (!bad) bad = Date.now(); } else bad = 0;
+    var on = !!bad && Date.now() - bad >= (off ? 1500 : HOLD);
+    if (on) {
+      var t = el.querySelector('[data-tavo-offline-text]') || el;
+      var v = (off ? 'Offline' : 'Keine Live-Verbindung') + stand();
+      if (t.textContent !== v) t.textContent = v;
+    }
+    el.classList.toggle('is-offline', on);
+    el.setAttribute('aria-hidden', on ? 'false' : 'true');
+  }
+  function reload() { if (window.tavoReload) window.tavoReload(); setTimeout(check, 1500); }
+  setInterval(check, 3000);
+  addEventListener('offline', function () { check(); setTimeout(check, 1600); });
+  addEventListener('online', function () { reload(); setTimeout(check, 300); });
+  document.addEventListener('click', function (e) {
+    if (e.target.closest && e.target.closest('[data-tavo-offline]')) { e.preventDefault(); reload(); }
+  });
+})();
+</script>

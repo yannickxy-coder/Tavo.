@@ -1,0 +1,764 @@
+<!-- GSAP kommt aus Webflow (Site-Einstellungen), List.js aus dem Page-Footer — hier nicht noch einmal laden. -->
+
+<!-- ═══ 2 ═══ Live Search ═══════════════════════════════════════ -->
+<script>
+(function () {
+
+  const CONFIG = { minChars: 1, debounce: 120, skeletonCount: 3 };
+
+  function debounce(fn, wait) {
+    let t;
+    return function () {
+      const ctx = this, args = arguments;
+      clearTimeout(t);
+      t = setTimeout(function () { fn.apply(ctx, args); }, wait);
+    };
+  }
+
+  // Attribute -> Klassen, damit List.js sie findet
+  function bridgeAttributes() {
+    [['data-live-search-list','live-search__list'],
+     ['data-live-search-name','live-search__name'],
+     ['data-live-search-keywords','live-search__keywords']].forEach(function (pair) {
+      document.querySelectorAll('[' + pair[0] + ']').forEach(function (el) {
+        el.classList.add(pair[1]);
+      });
+    });
+    // Klasse versehentlich auf dem Collection List Wrapper? Nach innen schieben.
+    document.querySelectorAll('.live-search__list.w-dyn-list').forEach(function (w) {
+      const inner = w.querySelector('.w-dyn-items');
+      if (inner) {
+        w.classList.remove('live-search__list');
+        inner.classList.add('live-search__list');
+      }
+    });
+  }
+
+  // Klont die erste Row im Wrapper so oft, wie im Attribut steht
+  function buildSkeletons(host) {
+    const count = parseInt(host.getAttribute('data-live-search-skeleton'), 10) || CONFIG.skeletonCount;
+    const template = host.firstElementChild;
+    if (!template) return;
+
+    template.setAttribute('data-skeleton-row', '');
+    template.style.setProperty('--i', 0);
+
+    while (host.children.length > count) host.lastElementChild.remove();
+
+    for (let i = host.children.length; i < count; i++) {
+      const clone = template.cloneNode(true);
+      clone.style.setProperty('--i', i);
+      host.appendChild(clone);
+    }
+
+    host.setAttribute('aria-hidden', 'true');
+  }
+
+  // Reservierungssuche: Daten filtern, danach mit der vorhandenen Vorlage rendern.
+  function normalizeSearch(value) {
+    return String(value == null ? '' : value).normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/ß/g, 'ss').trim();
+  }
+  function searchRows(rows, query) {
+    const terms = normalizeSearch(query).split(/\s+/).filter(Boolean);
+    return rows.filter(function (r) {
+      const text = normalizeSearch([r.guest_name, r.reference].filter(Boolean).join(' '));
+      return terms.every(function (term) { return text.includes(term); });
+    });
+  }
+  function initReservationSearch() {
+    const api = window.tavoReservierungen;
+    if (!api || !api.kit) return;
+    document.querySelectorAll('[data-live-search]').forEach(function (root) {
+      const host = root.querySelector('[data-res-search-list]');
+      if (!host) return;
+      if (root._tavoSearch) { root._tavoSearch.render(); return; }
+      const group = root.getAttribute('data-search-overlay');
+      const bar = Array.from(document.querySelectorAll('[data-search-bar]'))
+        .find(function (el) { return el.getAttribute('data-search-bar') === group; });
+      const input = root.querySelector('[data-live-search-input]') || (bar && bar.querySelector('[data-search-input]'));
+      if (!input) return;
+      const skeleton = root.querySelector('[data-live-search-skeleton]');
+      const empty = root.querySelector('[data-live-search-not-found]');
+      const status = root.querySelector('[data-live-search-status]');
+      if (skeleton) {
+        // Such-Skeletons gehoeren nicht zum globalen Dashboard-Ladezustand.
+        skeleton.querySelectorAll('[data-res-skeleton]').forEach(function (el) { el.removeAttribute('data-res-skeleton'); el.style.display = ''; });
+        buildSkeletons(skeleton);
+      }
+      const pageSize = Math.max(1, parseInt(host.getAttribute('data-res-page-size'), 10) || 30);
+      const L = { host: host, itemClass: host.getAttribute('data-res-item-class') || '',
+        cancelClass: host.getAttribute('data-res-cancelled-class') || 'is-storniert',
+        matches: [], nodes: new Map(), groups: new Map(), group: '', limit: pageSize, sentinel: null };
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.textContent = 'Weitere Ergebnisse anzeigen';
+      more.setAttribute('data-res-search-more', '');
+      host.after(more);
+      let lastQuery = null;
+      function show(el, on) { if (el) el.style.display = on ? '' : 'none'; }
+      function render() {
+        const store = window.tavoStore;
+        const query = input.value.trim();
+        if (query !== lastQuery) { L.limit = pageSize; lastQuery = query; }
+        const active = query.length >= CONFIG.minChars;
+        const ready = !!(store && store.ready);
+        const hits = active && ready ? searchRows(store.all(), query) : [];
+        const now = Date.now();
+        L.matches = hits.map(function (r) { return api.kit.derive(r, now); })
+          .sort(function (a, b) { return a.start - b.start || String(a.id).localeCompare(String(b.id)); });
+        api.kit.reconcile(L);
+        const state = !active ? 'idle' : !ready ? 'loading' : hits.length ? 'results' : 'empty';
+        root.setAttribute('data-live-search-state', state);
+        root.setAttribute('aria-busy', state === 'loading' ? 'true' : 'false');
+        root.querySelectorAll('[data-live-search-query]').forEach(function (el) { el.textContent = query; });
+        root.querySelectorAll('[data-live-search-count]').forEach(function (el) { el.textContent = active && ready ? String(hits.length) : ''; });
+        show(host, state === 'results');
+        show(empty, state === 'empty');
+        show(skeleton, state === 'loading');
+        show(more, state === 'results' && L.limit < L.matches.length);
+        if (status) status.textContent = state === 'loading' ? 'Reservierungen werden geladen' : state === 'empty' ? 'Keine Ergebnisse' : state === 'results' ? hits.length + ' Ergebnisse' : '';
+      }
+      more.addEventListener('click', function () { L.limit += pageSize; render(); });
+      input.addEventListener('input', debounce(render, CONFIG.debounce));
+      input.addEventListener('keydown', function (e) { if (e.key === 'Escape') { input.value = ''; render(); } });
+      host.addEventListener('click', function (e) {
+        const item = e.target.closest('[data-res-item]');
+        if (!item || !host.contains(item)) return;
+        const opener = item.querySelector('[data-res-open]');
+        if (opener && !opener.contains(e.target)) return;
+        const row = window.tavoStore && window.tavoStore.get(item.getAttribute('data-res-id'));
+        if (!row) return;
+        e.preventDefault();
+        document.dispatchEvent(new CustomEvent('tavo:open', { detail: row }));
+      });
+      root._tavoSearch = { render: render };
+      render();
+    });
+  }
+
+  function initLiveSearch() {
+    initReservationSearch();
+    bridgeAttributes();
+    if (typeof List === 'undefined') return;
+
+    document.querySelectorAll('[data-live-search]').forEach(function (root) {
+      if (root._liveSearch || root.querySelector('[data-res-search-list]')) return;
+
+      const group = root.getAttribute('data-search-overlay');
+      const input = root.querySelector('[data-live-search-input]')
+                 || (group && document.querySelector('[data-search-bar="' + group + '"] [data-search-input]'));
+      if (!input) return;
+
+      const listEl = root.querySelector('.live-search__list');
+      if (!listEl) return;
+
+      const notFound = root.querySelector('[data-live-search-not-found]');
+      const skeleton = root.querySelector('[data-live-search-skeleton]');
+      const status   = root.querySelector('[data-live-search-status]');
+      // Elemente, die den Suchbegriff anzeigen sollen
+      const queryEls = root.querySelectorAll('[data-live-search-query]');
+      const countEls = root.querySelectorAll('[data-live-search-count]');
+
+      if (skeleton) buildSkeletons(skeleton);
+
+      const list = new List(root, {
+        listClass: 'live-search__list',
+        valueNames: ['live-search__name', 'live-search__keywords'],
+        fuzzySearch: { location: 0, distance: 100, threshold: 0.3 }
+      });
+
+      function setText(nodes, text) {
+        nodes.forEach(function (el) { el.textContent = text; });
+      }
+
+      function render() {
+        const q = input.value.trim();
+
+        setText(queryEls, q);
+
+        if (q.length < CONFIG.minChars) {
+          list.search();
+          root.setAttribute('data-live-search-state', 'idle');
+          setText(countEls, '');
+          if (status) status.textContent = '';
+          return;
+        }
+
+        if (typeof list.fuzzySearch === 'function') list.fuzzySearch(q);
+        else list.search(q, ['live-search__name', 'live-search__keywords']);
+
+        const hits = list.matchingItems.length;
+        setText(countEls, String(hits));
+
+        if (hits === 0) {
+          root.setAttribute('data-live-search-state', 'empty');
+          if (status) status.textContent = 'Keine Ergebnisse';
+        } else {
+          root.setAttribute('data-live-search-state', 'results');
+          if (status) status.textContent = hits + ' Ergebnisse';
+        }
+      }
+
+      input.addEventListener('input', debounce(render, CONFIG.debounce));
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') { input.value = ''; render(); }
+      });
+
+      root._liveSearch = list;
+      root._liveSearchRender = render;
+      render();
+    });
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initLiveSearch);
+  else initLiveSearch();
+  document.addEventListener('tavo:ready', initLiveSearch);
+  document.addEventListener('tavo:rendered', initReservationSearch);
+  window.initLiveSearch = initLiveSearch;
+})();
+</script>
+
+
+<!-- ═══ 3 ═══ Search Bar ════════════════════════════════════════ -->
+<script>
+(function () {
+
+  // ── Easing-Presets ──────────────────────────────────────────
+  const EASINGS = {
+    soft:   'cubic-bezier(.22,.61,.24,1)',
+    gentle: 'cubic-bezier(.33,1,.68,1)',
+    snap:   'cubic-bezier(.2,.9,.3,1)',
+    swift:  'cubic-bezier(.32,.72,0,1)',
+    spring: 'linear(0,.009,.035,.078,.137,.21,.297,.394,.5,.606,.703,.79,.863,.922,.965,.991,1.004,1.008,1.007,1.003,1)'
+  };
+
+  const PROPS_NO_TRANSFORM =
+    'opacity, width, max-width, min-width, height, max-height, margin, padding, ' +
+    'background-color, color, border-radius, border-color, box-shadow, gap, ' +
+    'filter, backdrop-filter, font-size, letter-spacing';
+
+  const DEFAULTS = {
+    activeClass: 'is-active',
+    filledClass: 'is-filled',
+    duration: 520,
+    ease: 'soft',
+    delay: 0,
+    delayOut: null,
+    props: 'all',
+    clearDuration: 180,
+    clearEase: 'snap',
+    pulse: 0,
+    pulseSquash: 0.1,
+    pulseRelease: 1,
+    placeholderIdle: '',
+    placeholderActive: '',
+    placeholderEllipsis: '…',
+    overlayTop: 0,
+    lockScroll: true,
+    closeOnScrim: true,
+    clearOnClose: true,
+    esc: true,
+    breakpoint: 0
+  };
+
+  // GSAP erst beim Aufruf prüfen — Webflows GSAP lädt nach diesem Embed
+  const hasGsap = () => typeof window.gsap !== 'undefined';
+  const supportsLinear = window.CSS && CSS.supports &&
+                         CSS.supports('transition-timing-function', 'linear(0,1)');
+  const reduceMotion = window.matchMedia &&
+                       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const ELASTIC = 'linear(0,.218,.658,1.045,1.196,1.157,1.043,.967,.955,.982,1.007,1.014,1.007,.999,.997,1)';
+
+  function resolveEase(v) {
+    if (!v) return EASINGS.soft;
+    if (EASINGS[v]) return (v === 'spring' && !supportsLinear) ? EASINGS.soft : EASINGS[v];
+    return v;
+  }
+
+  function attr(el, name, fallback) {
+    const v = el.getAttribute('data-search-' + name);
+    if (v === null || v === '') return fallback;
+    if (v === 'true') return true;
+    if (v === 'false') return false;
+    const n = parseFloat(v);
+    return (isNaN(n) || /[^0-9.\-]/.test(v)) ? v : n;
+  }
+
+  function realDuration(el) {
+    const cs = getComputedStyle(el);
+    function maxOf(str) {
+      return (str || '0s').split(',').reduce(function (m, v) {
+        v = v.trim();
+        const n = parseFloat(v) * (v.indexOf('ms') > -1 ? 1 : 1000);
+        return Math.max(m, isNaN(n) ? 0 : n);
+      }, 0);
+    }
+    return maxOf(cs.transitionDuration) + maxOf(cs.transitionDelay);
+  }
+
+  // ── Placeholder kuerzen: Browser koennen das nicht selbst ────
+  let measureCtx = null;
+
+  function textWidth(text, font) {
+    if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d');
+    measureCtx.font = font;
+    return measureCtx.measureText(text).width;
+  }
+
+  function fitPlaceholder(input, full, ellipsis) {
+    if (!input || !full) return;
+    const cs = getComputedStyle(input);
+    const font = cs.fontStyle + ' ' + cs.fontVariant + ' ' + cs.fontWeight + ' ' +
+                 cs.fontSize + ' ' + cs.fontFamily;
+    const avail = input.clientWidth
+                - parseFloat(cs.paddingLeft || 0)
+                - parseFloat(cs.paddingRight || 0)
+                - 2;                                  // Cursor-Reserve
+    if (avail <= 0) return;
+
+    if (textWidth(full, font) <= avail) {
+      if (input.getAttribute('placeholder') !== full) input.setAttribute('placeholder', full);
+      return;
+    }
+
+    let lo = 0, hi = full.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (textWidth(full.slice(0, mid).replace(/\s+$/, '') + ellipsis, font) <= avail) lo = mid;
+      else hi = mid - 1;
+    }
+    const cut = full.slice(0, lo).replace(/\s+$/, '') + ellipsis;
+    if (input.getAttribute('placeholder') !== cut) input.setAttribute('placeholder', cut);
+  }
+
+  function timingFor(el, cfg, pulses, overrides) {
+    const o = overrides || {};
+    const dIn = attr(el, 'delay', cfg.delay);
+    let props = attr(el, 'props', cfg.props);
+    if (pulses && props === 'all') props = PROPS_NO_TRANSFORM;
+    return {
+      duration: attr(el, 'duration', o.duration !== undefined ? o.duration : cfg.duration),
+      ease:     resolveEase(attr(el, 'ease', o.ease !== undefined ? o.ease : cfg.ease)),
+      props:    props,
+      delayIn:  dIn,
+      delayOut: attr(el, 'delay-out', cfg.delayOut !== null ? cfg.delayOut : dIn)
+    };
+  }
+
+  function applyTiming(el, cfg, phase, pulses, overrides) {
+    const t = el._searchTiming || (el._searchTiming = timingFor(el, cfg, pulses, overrides));
+    el.style.transitionProperty       = t.props;
+    el.style.transitionDuration       = t.duration + 'ms';
+    el.style.transitionTimingFunction = t.ease;
+    el.style.transitionDelay          = (phase === 'in' ? t.delayIn : t.delayOut) + 'ms';
+  }
+
+  function initSearch() {
+    document.querySelectorAll('[data-search-bar]').forEach(function (bar) {
+      if (bar._search) return;
+
+      const group   = bar.getAttribute('data-search-bar');
+      const overlay = document.querySelector('[data-search-overlay="' + group + '"]');
+      if (!overlay) return;
+
+      const cfg = {};
+      Object.keys(DEFAULTS).forEach(function (k) {
+        const kebab = k.replace(/[A-Z]/g, function (m) { return '-' + m.toLowerCase(); });
+        cfg[k] = attr(bar, kebab, DEFAULTS[k]);
+      });
+
+      const input = bar.querySelector('[data-search-input]');
+      const field = bar.querySelector('[data-search-field]');
+      const scrim = overlay.querySelector('[data-search-scrim]');
+      const clear = bar.querySelector('[data-search-clear]')
+                 || overlay.querySelector('[data-search-clear]');
+
+      const cancels = [].concat(Array.from(bar.querySelectorAll('[data-search-cancel]')))
+                        .concat(Array.from(overlay.querySelectorAll('[data-search-cancel]')));
+
+      function collect(sel) {
+        const found = [].concat(Array.from(bar.querySelectorAll(sel)))
+                        .concat(Array.from(overlay.querySelectorAll(sel)));
+        if (bar.matches(sel)) found.unshift(bar);
+        if (overlay.matches(sel)) found.unshift(overlay);
+        return found.filter(function (el, i) { return found.indexOf(el) === i; });
+      }
+
+      // ── Morph ───────────────────────────────────────────────
+      const morphs = collect('[data-search-morph]');
+      const morphTimers = new Map();
+
+      function morphLayers(m) {
+        return {
+          idle:   m.querySelector('[data-search-morph-idle]'),
+          active: m.querySelector('[data-search-morph-active]')
+        };
+      }
+
+      function syncMorph(m, on) {
+        const L = morphLayers(m);
+        const show = on ? L.active : L.idle;
+        const hide = on ? L.idle : L.active;
+        const ms = show ? realDuration(show) : realDuration(m);
+
+        clearTimeout(morphTimers.get(m));
+
+        if (show) {
+          show.style.visibility = 'visible';
+          show.style.pointerEvents = 'auto';
+          void show.offsetWidth;
+        }
+        if (hide) hide.style.pointerEvents = 'none';
+
+        morphTimers.set(m, setTimeout(function () {
+          if (hide) hide.style.visibility = 'hidden';
+        }, ms || 0));
+      }
+
+      // ── Pulse ───────────────────────────────────────────────
+      const pulses = collect('[data-search-pulse]');
+
+      function runPulse(el, phase) {
+        if (reduceMotion) return;
+        const factor = attr(el, 'pulse', cfg.pulse);
+        if (!factor) return;
+
+        const inner = el.querySelector('[data-search-pulse-inner]') || el;
+        const w = inner.offsetWidth;
+        const h = inner.offsetHeight;
+        if (!w || !h) return;
+
+        const fs      = parseFloat(getComputedStyle(inner).fontSize) || 16;
+        const stretch = factor * fs;
+        const squashDur  = attr(el, 'pulse-squash', cfg.pulseSquash);
+        const releaseDur = attr(el, 'pulse-release', cfg.pulseRelease);
+        const delay = (attr(el, 'pulse-delay', 0)) / 1000;
+
+        const wide = phase === 'in';
+        const sx = (w + stretch) / w;
+        const sy = (h - stretch * 0.33) / h;
+
+        const toX = wide ? sx : sy;
+        const toY = wide ? sy : sx * 1.3;
+        const outerScale = wide ? 1 : 0.85;
+
+        if (hasGsap()) {
+          if (el._pulseTl && el._pulseTl.kill) el._pulseTl.kill();
+          const tl = gsap.timeline({ delay: delay });
+          el._pulseTl = tl;
+          tl.to(inner, { scaleX: toX, scaleY: toY, duration: squashDur, ease: 'power1.out' });
+          if (inner !== el) tl.to(el, { scale: outerScale, duration: squashDur, ease: 'power1.out' }, '<');
+          tl.to(inner, { scaleX: 1, scaleY: 1, duration: releaseDur, ease: 'elastic.out(1, 0.3)' });
+          if (inner !== el) tl.to(el, { scale: 1, duration: releaseDur, ease: 'elastic.out(1, 0.3)' }, '<');
+        } else if (inner.animate) {
+          inner.animate([
+            { transform: 'scale(1,1)' },
+            { transform: 'scale(' + toX + ',' + toY + ')', offset: squashDur / (squashDur + releaseDur) },
+            { transform: 'scale(1,1)' }
+          ], {
+            duration: (squashDur + releaseDur) * 1000,
+            delay: delay * 1000,
+            easing: ELASTIC,
+            fill: 'none'
+          });
+        }
+      }
+
+      function toggleTargets() {
+        return [bar, overlay].concat(
+          collect('[data-search-toggle], [data-search-morph], [data-search-morph-idle], [data-search-morph-active]')
+            .filter(function (el) { return el !== bar && el !== overlay; })
+        );
+      }
+
+      const pulseSet = new Set(pulses);
+      toggleTargets().forEach(function (el) { applyTiming(el, cfg, 'in', pulseSet.has(el)); });
+      pulses.forEach(function (el) { applyTiming(el, cfg, 'in', true); });
+      if (clear) {
+        applyTiming(clear, cfg, 'in', pulseSet.has(clear),
+                    { duration: cfg.clearDuration, ease: cfg.clearEase });
+      }
+
+      overlay.style.setProperty('--s-overlay-top', cfg.overlayTop + 'px');
+
+      // ── Placeholder ─────────────────────────────────────────
+      let placeholderFull = cfg.placeholderIdle ||
+                            (input ? input.getAttribute('placeholder') || '' : '');
+
+      function refitPlaceholder() {
+        if (input) fitPlaceholder(input, placeholderFull, cfg.placeholderEllipsis);
+      }
+
+      if (input) {
+        refitPlaceholder();
+        // Breite aendert sich waehrend der Animation -> laufend neu messen
+        if (window.ResizeObserver) {
+          new ResizeObserver(refitPlaceholder).observe(input);
+        } else {
+          window.addEventListener('resize', refitPlaceholder);
+        }
+      }
+
+      const form = input && input.closest('form');
+      if (form) form.addEventListener('submit', function (e) { e.preventDefault(); });
+
+      let scrollY = 0;
+      let clearHideTimer = null;
+      let clearFilled = null;
+      const isOpen = function () { return bar.getAttribute('data-search-state') === 'open'; };
+      const active = function () { return !cfg.breakpoint || window.innerWidth <= cfg.breakpoint; };
+
+      function setState(state) {
+        const on = state === 'open';
+        const targets = toggleTargets();
+
+        targets.forEach(function (el) {
+          applyTiming(el, cfg, on ? 'in' : 'out', pulseSet.has(el));
+        });
+        void bar.offsetWidth;
+
+        bar.setAttribute('data-search-state', state);
+        overlay.setAttribute('data-search-state', state);
+        document.documentElement.setAttribute('data-search-' + group, state);
+        targets.forEach(function (el) { el.classList.toggle(cfg.activeClass, on); });
+        morphs.forEach(function (m) { syncMorph(m, on); });
+        pulses.forEach(function (el) {
+          if (el !== clear) runPulse(el, on ? 'in' : 'out');
+        });
+
+        if (input) {
+          const ph = on ? cfg.placeholderActive : cfg.placeholderIdle;
+          if (ph) placeholderFull = ph;
+          refitPlaceholder();
+          // nach der Transition nochmal, dann steht die Endbreite
+          setTimeout(refitPlaceholder, realDuration(input) || 0);
+        }
+      }
+
+      function syncClear() {
+        if (!clear) return;
+        const has = !!(input && input.value.length);
+        if (has === clearFilled) return;
+        clearFilled = has;
+
+        clearTimeout(clearHideTimer);
+        clear.style.transitionDelay = '0ms';
+
+        if (has) {
+          clear.style.visibility = 'visible';
+          clear.style.pointerEvents = 'auto';
+          void clear.offsetWidth;
+          clear.classList.add(cfg.filledClass);
+          runPulse(clear, 'in');
+        } else {
+          clear.classList.remove(cfg.filledClass);
+          clear.style.pointerEvents = 'none';
+          const ms = realDuration(clear);
+          clearHideTimer = setTimeout(function () {
+            clear.style.visibility = 'hidden';
+          }, ms || 0);
+        }
+      }
+
+      function lock() {
+        if (!cfg.lockScroll) return;
+        scrollY = window.scrollY;
+        document.body.style.position = 'fixed';
+        document.body.style.top = -scrollY + 'px';
+        document.body.style.width = '100%';
+      }
+      function unlock() {
+        if (!cfg.lockScroll) return;
+        document.body.style.position = '';
+        document.body.style.top = '';
+        document.body.style.width = '';
+        window.scrollTo(0, scrollY);
+      }
+
+      function open() {
+        if (!active()) return;
+        if (isOpen()) { if (input) input.focus({ preventScroll: true }); return; }
+        setState('open');
+        lock();
+        if (input) input.focus({ preventScroll: true });
+        bar.dispatchEvent(new CustomEvent('search:open', { detail: { group: group } }));
+      }
+
+      function close() {
+        if (!isOpen()) return;
+        setState('idle');
+        unlock();
+        if (input) {
+          if (cfg.clearOnClose) {
+            input.value = '';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          input.blur();
+        }
+        syncClear();
+        bar.dispatchEvent(new CustomEvent('search:close', { detail: { group: group } }));
+      }
+
+      if (field) {
+        field.addEventListener('pointerdown', function (e) {
+          if (input && e.target !== input) e.preventDefault();
+          open();
+        });
+      }
+      if (input) {
+        input.addEventListener('focus', open);
+        input.addEventListener('input', syncClear);
+      }
+
+      if (clear) {
+        clear.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (input) {
+            input.value = '';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.focus({ preventScroll: true });
+          }
+          syncClear();
+        });
+      }
+
+      morphs.forEach(function (m) {
+        m.addEventListener('click', function (e) {
+          if (isOpen()) {
+            e.preventDefault();
+            e.stopPropagation();
+            close();
+          }
+        });
+      });
+
+      cancels.forEach(function (btn) { btn.addEventListener('click', close); });
+      if (scrim && cfg.closeOnScrim) scrim.addEventListener('click', close);
+      if (cfg.esc) document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') close();
+      });
+
+      // Init ohne Puls
+      const targets = toggleTargets();
+      bar.setAttribute('data-search-state', 'idle');
+      overlay.setAttribute('data-search-state', 'idle');
+      targets.forEach(function (el) { el.classList.remove(cfg.activeClass); });
+      morphs.forEach(function (m) { syncMorph(m, false); });
+      if (clear) {
+        clear.classList.remove(cfg.filledClass);
+        clear.style.visibility = 'hidden';
+        clearFilled = false;
+      }
+      refitPlaceholder();
+
+      bar._search = overlay._search = {
+        open: open, close: close, group: group, cfg: cfg,
+        bar: bar, overlay: overlay, easings: EASINGS,
+        refitPlaceholder: refitPlaceholder,
+        pulse: function (phase) { pulses.forEach(function (el) { runPulse(el, phase || 'in'); }); }
+      };
+    });
+  }
+
+  function boot() {
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(initSearch);
+    else initSearch();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+  window.initSearch = initSearch;
+})();
+</script>
+
+
+<!-- ═══ 4 ═══ CSS ═══════════════════════════════════════════════ -->
+<style>
+/* --- Eingabe: nicht umbrechen, Wert abschneiden --- */
+[data-search-input] {
+  min-width: 0;              /* ohne das schrumpft ein Input im Flex nie */
+  flex: 1 1 auto;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+}
+[data-search-input]::-webkit-search-cancel-button { display: none; }
+[data-search-field] { min-width: 0; }
+
+/* --- Clear-Container vor dem Init unsichtbar --- */
+[data-search-clear] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* --- Pulse: Ankerpunkt fuer Squash & Stretch --- */
+[data-search-pulse],
+[data-search-pulse-inner] {
+  transform-origin: center center;
+  -webkit-tap-highlight-color: transparent;
+  will-change: transform;
+}
+
+/* --- Morph: beide Layer uebereinander --- */
+[data-search-morph] { position: relative; }
+[data-search-morph-idle],
+[data-search-morph-active] {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+}
+[data-search-morph-active] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* --- Overlay --- */
+[data-search-overlay] {
+  top: var(--s-overlay-top, 0px);
+  visibility: hidden;
+  pointer-events: none;
+}
+[data-search-overlay][data-search-state="open"] {
+  visibility: visible;
+  pointer-events: auto;
+}
+
+/* --- Listen-Zustaende: nur ausblenden, nie display erzwingen --- */
+[data-live-search-state="results"] [data-live-search-skeleton],
+[data-live-search-state="empty"]   [data-live-search-skeleton]  { display: none; }
+
+[data-live-search-state="idle"]    .live-search__list           { display: none; }
+
+[data-live-search-state="idle"]    [data-live-search-not-found],
+[data-live-search-state="results"] [data-live-search-not-found] { display: none; }
+
+/* --- Skeleton-Puls: styling-neutral ueber Opacity --- */
+[data-skeleton-shape] {
+  animation: s-skeleton-pulse var(--skeleton-pulse-duration, 1600ms)
+             cubic-bezier(.45,0,.25,1) infinite;
+  animation-delay: calc(var(--i, 0) * var(--skeleton-pulse-stagger, 120ms));
+}
+/* Geschlossene Suche: Puls anhalten statt unsichtbar weiterlaufen lassen */
+[data-search-overlay][data-search-state="idle"] [data-skeleton-shape] {
+  animation-play-state: paused;
+}
+@keyframes s-skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: var(--skeleton-pulse-min, .45); }
+}
+
+.u-sr-only {
+  position: absolute; width: 1px; height: 1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-skeleton-shape] { animation: none; }
+}
+</style>
+

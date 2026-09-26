@@ -1,0 +1,891 @@
+<script>
+/* ============================================================
+   tavo — Neue Reservierung (Personal) · v8.2 · attributgesteuert
+   Gruppen:  [data-nr-group=source|day|party|salutation|tags] > [data-nr-value]
+   Dynamisch: [data-nr-slots]+[data-nr-slot-template] ([data-nr-slot-time|free])
+              [data-nr-areas]+[data-nr-area-template] · [data-nr-availability]
+              [data-nr-cal-chip] · [data-nr-time-chip]+[data-nr-time-label]
+              [data-nr-date-text] · [data-nr-summary] · [data-nr-source-text]
+              [data-nr-party-minus|value|plus] — value wird zum Zahlenfeld (Tippen öffnet Zahlentastatur)
+   Felder:   [data-nr-field=first_name|last_name|phone|email|note] + [data-nr-label]
+             [data-nr-req] · [data-nr-clear] · [data-nr-count="note"] · [data-nr-error]
+             [data-nr-toggle="send_confirmation"] + [data-nr-toggle-box] + [data-nr-confirm-sub]
+   Länder:   [data-nr-country-toggle] ([data-nr-prefix-flag|code]) · [data-nr-country-panel]
+             > [data-nr-country-search] + [data-nr-country-list] > [data-nr-country-template]
+   Stammgast: [data-nr-guest-hit] ([data-nr-guest-initials|name|meta|note|upcoming]) + [data-nr-guest-apply]
+   Walk-in:  [data-nr-walkin="show|hide"] (ohne Attribut findet das Skript die Abschnitte selbst)
+             [data-nr-walkin-time] · [data-nr-field="walkin_name"] · Button-Text: data-nr-walkin-label
+   Rückgängig: gespeichert wird erst NACH dem Countdown — vorher existiert die Reservierung nur lokal.
+             Über Tavo.statusChip mit Aktion (Label: data-nr-undo-label am Submit)
+             Rückfall ohne Chip: [data-nr-undo] ([data-nr-undo-title|sub|btn|bar])
+   Zeiten:   [data-nr-slot-group-template] → „Mittag“ / „Abend“ (Grenze: data-nr-slot-split, Standard 16:00)
+   Hinweise: aus snippets (forms enthält „hinweis“), Vorlage = erster Chip in [data-nr-group="tags"]
+   Sitzbereich: Pflicht, sobald Bereiche existieren (abschalten: data-nr-area-required="false" an [data-nr-areas])
+   Absenden: [data-nr-submit] → is-off · is-warn · is-busy
+   Klassen:  is-on · is-off · is-full · is-low · is-up · is-focus · is-invalid · is-checked · is-over
+   ============================================================ */
+(function () {
+  'use strict';
+
+  var SU = 'https://wiwhbszwkuekxkdiqcgd.supabase.co';
+  var WD = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+  var LABEL = { last_name: 'Nachname', phone: 'Telefon', email: 'E-Mail' };
+  var SOURCE_TEXT = { telefon: 'Telefonisch', 'walk-in': 'Walk-in', email: 'Per E-Mail', instagram: 'Instagram', sonstige: 'Sonstige' };
+  var NOTE_MAX = 600;
+  var COUNTRIES = [
+    ['de', 'Deutschland', '+49'], ['at', 'Österreich', '+43'], ['ch', 'Schweiz', '+41'],
+    ['nl', 'Niederlande', '+31'], ['be', 'Belgien', '+32'], ['lu', 'Luxemburg', '+352'],
+    ['fr', 'Frankreich', '+33'], ['it', 'Italien', '+39'], ['es', 'Spanien', '+34'],
+    ['gb', 'Großbritannien', '+44'], ['dk', 'Dänemark', '+45'], ['se', 'Schweden', '+46'],
+    ['no', 'Norwegen', '+47'], ['pl', 'Polen', '+48'], ['cz', 'Tschechien', '+420'],
+    ['us', 'USA / Kanada', '+1']
+  ];
+  var FIELD_ORDER = ['first_name', 'last_name', 'phone', 'email'];
+  var UNDO_MS = 6000;
+  var STAFF_MAX = 500;   // Obergrenze für das Personal (Restaurant-Maximum gilt nur als Hinweis)
+  var partyInput = null;
+  var NUM = ['null', 'eine', 'zwei', 'drei', 'vier', 'fünf', 'sechs', 'sieben', 'acht', 'neun', 'zehn', 'elf', 'zwölf'];
+  var WD_LONG = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
+  var pending = null, accessToken = null, resetTimer = 0;
+  var country = COUNTRIES[0], guestHit = null, guestTimer = 0, guestReq = 0;
+
+  var root, form, sheetName, db, rid, tz = 'Europe/Berlin', maxParty = 30;
+  var areas = [], slots = [], slotReq = 0, force = false, busy = false, confirm = false, confirmTouched = false;
+  var S = { source: 'telefon', date: null, time: null, manualTime: false, party: 2, area: null, salutation: '', tags: [] };
+
+  function q(sel) { return form.querySelector(sel); }
+  function qa(sel) { return [].slice.call(form.querySelectorAll(sel)); }
+  function pad(n) { return String(n).padStart(2, '0'); }
+  function field(n) { return q('[data-nr-field="' + n + '"]'); }
+  function val(n) { var f = field(n); return f ? String(f.value || '').trim() : ''; }
+  function show(el, on) { if (el) el.style.display = on ? '' : 'none'; }
+  function cls(el, c, on) { if (el) el.classList.toggle(c, !!on); }
+  function phoneValue() {
+    var v = val('phone').replace(/\s+/g, ' ');
+    if (!v) return '';
+    if (v.charAt(0) === '+') return v;
+    return (country ? country[2] : '+49') + ' ' + v.replace(/^0+/, '');
+  }
+  function flagUrl(iso) { return 'url(https://flagcdn.com/w80/' + iso + '.png)'; }
+  function setCountry(c) {
+    country = c;
+    var pre = q('[data-nr-prefix]');
+    if (pre) pre.setAttribute('data-nr-prefix', c[2]);
+    var fl = q('[data-nr-prefix-flag]'); if (fl) fl.style.backgroundImage = flagUrl(c[0]);
+    var cd = q('[data-nr-prefix-code]'); if (cd) cd.textContent = c[2];
+  }
+  function detectCountry() {
+    var f = field('phone'); if (!f) return;
+    var raw = f.value.replace(/\s+/g, '');
+    var m = raw.match(/^(\+|00)(\d{1,3})/);
+    if (!m) return;
+    var digits = raw.replace(/^(\+|00)/, '');
+    var hit = COUNTRIES.slice().sort(function (a, b) { return b[2].length - a[2].length; })
+      .filter(function (c) { return digits.indexOf(c[2].slice(1)) === 0; })[0];
+    if (!hit) return;
+    setCountry(hit);
+    var code = hit[2].slice(1).split('').join('\\s*');
+    f.value = f.value.replace(/^\s*(\+|00)/, '').replace(new RegExp('^\\s*' + code), '')
+      .replace(/^\s*\(?0\)?\s*/, '').replace(/^\s+/, '');
+  }
+  function renderCountries(filter) {
+    var list = q('[data-nr-country-list]'); if (!list) return;
+    if (!list.__tpl) {
+      var tpl = list.querySelector('[data-nr-country-template]');
+      list.__tpl = tpl ? tpl.cloneNode(true) : null;
+      if (tpl) tpl.remove();
+    }
+    [].slice.call(list.children).forEach(function (n) { n.remove(); });
+    var f = (filter || '').toLowerCase().trim();
+    COUNTRIES.filter(function (c) { return !f || c[1].toLowerCase().indexOf(f) > -1 || c[2].indexOf(f.replace(/^00/, '+')) > -1; })
+      .forEach(function (c) {
+        var o = list.__tpl ? list.__tpl.cloneNode(true) : document.createElement('div');
+        o.removeAttribute('data-nr-country-template');
+        o.setAttribute('role', 'button');
+        var fl = o.querySelector('[data-nr-country-flag]'); if (fl) fl.style.backgroundImage = flagUrl(c[0]);
+        var nm = o.querySelector('[data-nr-country-name]'); if (nm) nm.textContent = c[1]; else o.textContent = c[1] + ' ' + c[2];
+        var cd = o.querySelector('[data-nr-country-code]'); if (cd) cd.textContent = c[2];
+        cls(o, 'is-on', c === country);
+        o.addEventListener('click', function () { setCountry(c); togglePanel(false); var p = field('phone'); if (p) p.focus(); update(); });
+        list.appendChild(o);
+      });
+  }
+  function togglePanel(on) {
+    var p = q('[data-nr-country-panel]'); if (!p) return;
+    if (on === undefined) on = p.style.display === 'none';
+    show(p, on);
+    cls(q('[data-nr-country-toggle]'), 'is-on', on);
+    if (on) { var s = q('[data-nr-country-search]'); if (s) { s.value = ''; } renderCountries(''); }
+  }
+
+  function initials(n) { return (n || '').split(/\s+/).filter(Boolean).slice(0, 2).map(function (w) { return w[0]; }).join('').toUpperCase() || '?'; }
+  function shortDate(iso) {
+    var d = new Date(iso);
+    var p = {}; new Intl.DateTimeFormat('de-DE', { timeZone: tz, weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+      .formatToParts(d).forEach(function (x) { p[x.type] = x.value; });
+    return { day: p.weekday.replace('.', '') + ', ' + p.day + '.' + p.month + '.', time: p.hour + ':' + p.minute };
+  }
+  function findGuest() {
+    clearTimeout(guestTimer);
+    guestTimer = setTimeout(function () {
+      if (!db || !rid) return;
+      var digits = val('phone').replace(/\D/g, ''), last = val('last_name');
+      var box = q('[data-nr-guest-hit]');
+      if (digits.length < 6 && last.length < 3) { guestHit = null; show(box, false); return; }
+      var my = ++guestReq;
+      db.rpc('staff_find_guest', { p_restaurant_id: rid, p_phone: digits.length >= 6 ? digits : null, p_last_name: last || null })
+        .then(function (res) {
+          if (my !== guestReq) return;
+          var h = (!res.error && res.data && res.data[0]) || null;
+          guestHit = h;
+          if (!box) return;
+          if (!h || box.__dismissedKey === (h.phone || h.full_name)) { show(box, false); return; }
+          var name = [h.first_name, h.last_name].filter(Boolean).join(' ') || h.full_name || h.phone;
+          var set = function (sel, v) { var el = box.querySelector(sel); if (el) { el.textContent = v || ''; show(el, !!v); } };
+          set('[data-nr-guest-initials]', initials(name));
+          set('[data-nr-guest-name]', name);
+          var meta = [h.visits + (h.visits === 1 ? ' Besuch' : ' Besuche')];
+          if (h.last_visit) meta.push('zuletzt ' + shortDate(h.last_visit).day);
+          if (h.last_area) meta.push(h.last_area);
+          set('[data-nr-guest-meta]', meta.join(' · '));
+          set('[data-nr-guest-note]', h.last_note ? h.last_note.replace(/\s+/g, ' ') : '');
+          if (h.upcoming_at) { var u = shortDate(h.upcoming_at); set('[data-nr-guest-upcoming]', 'Hat schon reserviert: ' + u.day + ' ' + u.time + ' Uhr'); }
+          else set('[data-nr-guest-upcoming]', '');
+          show(box, true);
+        });
+    }, 350);
+  }
+  function applyGuest() {
+    var h = guestHit; if (!h) return;
+    function fill(n, v) { var f = field(n); if (f && v && (!f.value || v.toLowerCase().indexOf(f.value.trim().toLowerCase()) === 0)) { f.value = v; paintLabel(n); } }
+    if (h.salutation) { S.salutation = h.salutation; setActive('salutation', h.salutation); }
+    fill('first_name', h.first_name && ['Frau', 'Herr', 'Familie'].indexOf(h.first_name) < 0 ? h.first_name : '');
+    fill('last_name', h.last_name);
+    if (h.phone && !val('phone')) {
+      var f = field('phone'); f.value = h.phone;
+      if (/^\s*(\+|00)/.test(h.phone)) detectCountry();
+      else { setCountry(COUNTRIES[0]); f.value = f.value.replace(/^\s*0+/, ''); }
+      paintLabel('phone');
+    }
+    fill('email', h.email);
+    if (h.last_note && !val('note')) {
+      var m = h.last_note.match(/^Hinweise: (.+)$/m);
+      if (m) m[1].split(/,\s*/).forEach(function (t) {
+        var chip = q('[data-nr-group="tags"] [data-nr-value="' + t + '"]');
+        if (chip && S.tags.indexOf(t) < 0) { S.tags.push(t); cls(chip, 'is-on', true); }
+      });
+    }
+    var box = q('[data-nr-guest-hit]'); if (box) { box.__dismissedKey = h.phone || h.full_name; show(box, false); }
+    update();
+  }
+  function sectionOf(el) {
+    while (el && el.parentElement) {
+      var p = el.parentElement;
+      if (p.hasAttribute('data-sheet-scroller') || p.tagName === 'FORM') return el;
+      el = p;
+    }
+    return null;
+  }
+  function walkinParts() {
+    var hide = qa('[data-nr-walkin="hide"]');
+    [q('[data-nr-group="day"]'), q('[data-nr-group="salutation"]'), field('note'), q('[data-nr-toggle]')]
+      .map(sectionOf).forEach(function (el) { if (el && hide.indexOf(el) < 0 && !el.hasAttribute('data-nr-walkin')) hide.push(el); });
+    return { hide: hide, show: qa('[data-nr-walkin="show"]') };
+  }
+  function paintWalkin() {
+    var w = S.source === 'walk-in', p = walkinParts();
+    p.hide.forEach(function (el) { show(el, !w); });
+    p.show.forEach(function (el) { el.style.display = w ? (el.getAttribute('data-nr-walkin-display') || 'flex') : 'none'; });
+    var t = q('[data-nr-walkin-time]'); if (t) t.textContent = 'Jetzt · ' + nowInTz() + ' Uhr';
+  }
+  function splitName(v) {
+    var parts = String(v || '').trim().split(/\s+/).filter(Boolean);
+    var last = parts.pop() || '';
+    return { first: parts.join(' '), last: last };
+  }
+  function spokenTime(t) { var h = +t.slice(0, 2), m = t.slice(3, 5); return m === '00' ? h + ' Uhr' : h + ':' + m + ' Uhr'; }
+  function spokenDay(iso) {
+    if (iso === todayInTz(0)) return 'Heute';
+    if (iso === todayInTz(1)) return 'Morgen';
+    var d = new Date(iso + 'T12:00:00Z'), diff = Math.round((d - new Date(todayInTz(0) + 'T12:00:00Z')) / 864e5);
+    return diff > 1 && diff < 7 ? WD_LONG[d.getUTCDay()] : dayLabel(iso);
+  }
+  function spokenParty(n) { return (n <= 12 ? NUM[n] : n) + (n === 1 ? ' Person' : ' Personen'); }
+  function sentence() {
+    var walk = S.source === 'walk-in', p = [];
+    p.push(walk ? 'Jetzt' : (S.date ? spokenDay(S.date) : ''));
+    if (!walk && S.time) p.push(spokenTime(S.time));
+    p.push(spokenParty(S.party));
+    if (S.area) p.push(areaName(S.area));
+    var nm = walk ? splitName(val('walkin_name')).last : val('last_name');
+    if (nm) {
+      var sal = { frau: 'Frau ', herr: 'Herr ', familie: 'Familie ' }[S.salutation] || '';
+      p.push('auf ' + (walk ? val('walkin_name') : sal + nm));
+    }
+    return p.filter(Boolean).join(', ');
+  }
+  function isEmail(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v); }
+
+  function parts(fmt, opts) {
+    var p = {};
+    new Intl.DateTimeFormat(fmt, Object.assign({ timeZone: tz }, opts)).formatToParts(new Date())
+      .forEach(function (x) { p[x.type] = x.value; });
+    return p;
+  }
+  function todayInTz(off) {
+    var p = parts('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' });
+    return new Date(Date.UTC(+p.year, +p.month - 1, +p.day + (off || 0))).toISOString().slice(0, 10);
+  }
+  function nowInTz() {
+    var p = parts('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    return pad(+p.hour) + ':' + pad(Math.floor(+p.minute / 5) * 5);
+  }
+  function dayLabel(iso, year) {
+    var d = new Date(iso + 'T12:00:00Z');
+    return WD[d.getUTCDay()] + ', ' + pad(d.getUTCDate()) + '.' + pad(d.getUTCMonth() + 1) + '.' + (year ? d.getUTCFullYear() : '');
+  }
+  function relDay(iso) {
+    return iso === todayInTz(0) ? 'Heute' : iso === todayInTz(1) ? 'Morgen' : dayLabel(iso);
+  }
+  function areaName(id) { var a = areas.filter(function (x) { return x.id === id; })[0]; return a ? a.name : ''; }
+
+  function setActive(group, value) {
+    var g = q('[data-nr-group="' + group + '"]');
+    if (!g) return;
+    [].forEach.call(g.querySelectorAll('[data-nr-value]'), function (b) {
+      cls(b, 'is-on', b.getAttribute('data-nr-value') === String(value));
+    });
+    movePill(g);
+  }
+
+  function movePill(g) {
+    var pill = g.querySelector('[data-nr-pill]');
+    if (!pill) return;
+    var o = g.querySelector('[data-nr-value].is-on');
+    if (!o) { pill.style.opacity = '0'; return; }
+    pill.style.opacity = '1';
+    pill.style.width = o.offsetWidth + 'px';
+    pill.style.transform = 'translateX(' + (o.offsetLeft - pill.offsetLeft) + 'px)';
+  }
+  function placePill(g) {
+    var pill = g.querySelector('[data-nr-pill]');
+    if (!pill) return;
+    var o = g.querySelector('[data-nr-value].is-on');
+    if (!o) { pill.style.opacity = '0'; return; }
+    var prev = pill.style.transition;
+    pill.style.transition = 'none';
+    pill.style.transform = 'translateX(0px)';
+    pill.style.width = o.offsetWidth + 'px';
+    pill.style.transform = 'translateX(' + (o.offsetLeft - pill.offsetLeft) + 'px)';
+    void pill.offsetWidth;
+    pill.style.transition = prev;
+    pill.style.opacity = '1';
+  }
+
+  function required() {
+    return S.source === 'walk-in' ? [] : S.source === 'email' ? ['last_name', 'email']
+      : S.source === 'telefon' ? ['last_name', 'phone'] : ['last_name'];
+  }
+  function missing() {
+    return required().filter(function (n) { var v = val(n); return n === 'email' ? !isEmail(v) : !v; });
+  }
+  function areaMissing() {
+    var host = q('[data-nr-areas]');
+    if (host && host.getAttribute('data-nr-area-required') === 'false') return false;
+    return areas.length > 0 && !S.area;
+  }
+  function paintRequired() {
+    var req = required();
+    qa('[data-nr-req]').forEach(function (f) { cls(f, 'is-optional', req.indexOf(f.getAttribute('data-nr-req')) < 0); });
+  }
+
+  function paintLabel(name) {
+    var f = field(name), l = q('[data-nr-label="' + name + '"]');
+    if (!f || !l) return;
+    cls(l, 'is-up', document.activeElement === f || !!f.value);
+    cls(f, 'is-focus', document.activeElement === f);
+  }
+
+  function paintDays() {
+    var l2 = q('[data-nr-day-label="2"]');
+    if (l2) l2.textContent = dayLabel(todayInTz(2));
+    var idx = [0, 1, 2].map(todayInTz).indexOf(S.date);
+    setActive('day', idx > -1 ? idx : '__none');
+    cls(q('[data-nr-cal-chip]'), 'is-on', idx < 0);
+    var dt = q('[data-nr-date-text]');
+    if (dt) dt.textContent = dayLabel(S.date, true);
+    if (dateInput) { dateInput.value = S.date; dateInput.min = todayInTz(0); }
+  }
+  function setDate(iso) {
+    if (!iso || iso === S.date) return;
+    S.date = iso;
+    if (!S.manualTime) S.time = null;
+    paintDays(); loadSlots(); update();
+  }
+
+  function makeChip(host, tplSel) {
+    var tpl = host.querySelector(tplSel);
+    if (tpl) {
+      if (!tpl.__tpl) { tpl.__tpl = tpl.cloneNode(true); tpl.remove(); host.__tpl = tpl.__tpl; }
+    }
+    var src = host.__tpl;
+    var el = src ? src.cloneNode(true) : document.createElement('div');
+    if (!src) el.className = 'ns-chip';
+    el.removeAttribute(tplSel.slice(1, -1));
+    el.setAttribute('role', 'button');
+    el.style.display = '';
+    return el;
+  }
+  function renderSlots() {
+    var host = q('[data-nr-slots]');
+    if (!host) return;
+    if (!host.__tpl) makeChip(host, '[data-nr-slot-template]');
+    [].slice.call(host.querySelectorAll('[data-nr-slot], [data-nr-slot-group]')).forEach(function (n) { n.remove(); });
+    if (host.__gtpl === undefined) {
+      var gt = host.querySelector('[data-nr-slot-group-template]');
+      host.__gtpl = gt ? gt.cloneNode(true) : null;
+      if (gt) gt.remove();
+    }
+    var split = host.getAttribute('data-nr-slot-split') || '16:00', lastGroup = null;
+    var list = slots.slice();
+    var today = S.date === todayInTz(0), now = nowInTz();
+    if (today) list = list.filter(function (s) { return s.slot >= now; });
+    if (S.source === 'walk-in' && today) list.unshift({ slot: now, passt: true, now: true });
+
+    var groups = {}; list.forEach(function (s) { if (!s.now) groups[s.slot < split ? 'Mittag' : 'Abend'] = 1; });
+    var useGroups = host.__gtpl && Object.keys(groups).length > 1;
+    list.forEach(function (s) {
+      if (useGroups && !s.now) {
+        var gname = s.slot < split ? 'Mittag' : 'Abend';
+        if (gname !== lastGroup) {
+          var g = host.__gtpl.cloneNode(true);
+          g.removeAttribute('data-nr-slot-group-template'); g.setAttribute('data-nr-slot-group', gname);
+          g.textContent = gname; g.style.display = ''; host.appendChild(g); lastGroup = gname;
+        }
+      }
+      var b = makeChip(host, '[data-nr-slot-template]');
+      var tEl = b.querySelector('[data-nr-slot-time]'), fEl = b.querySelector('[data-nr-slot-free]');
+      if (tEl) tEl.textContent = s.now ? 'Jetzt' : s.slot; else b.textContent = s.now ? 'Jetzt' : s.slot;
+      if (fEl) { var fr = Math.max(0, s.frei || 0); fEl.textContent = s.now || s.frei == null ? '' : (s.passt ? fr : 'voll'); show(fEl, !s.now && s.frei != null); }
+      b.setAttribute('data-nr-slot', s.slot);
+      cls(b, 'is-full', !s.passt);
+      cls(b, 'is-low', s.passt && s.frei != null && s.frei < S.party + 6);
+      cls(b, 'is-on', !S.manualTime && S.time === s.slot);
+      b.addEventListener('click', function () {
+        S.time = s.slot; S.manualTime = false; force = false;
+        var tl = q('[data-nr-time-label]'); if (tl) tl.textContent = tl.getAttribute('data-nr-default') || 'Andere Zeit';
+        cls(q('[data-nr-time-chip]'), 'is-on', false);
+        renderSlots(); update();
+      });
+      host.appendChild(b);
+    });
+    show(q('[data-nr-slots-empty]'), list.length === 0 && S.source !== 'walk-in');
+  }
+  function loadSlots() {
+    if (!db || !rid || !S.date) return;
+    var my = ++slotReq;
+    db.rpc('staff_day_slots', { p_restaurant_id: rid, p_date: S.date, p_party: S.party, p_area: S.area })
+      .then(function (res) {
+        if (my !== slotReq) return;
+        slots = res.error ? [] : (res.data || []);
+        if (res.error) console.warn('[tavo-neu]', res.error.message);
+        if (S.time && !S.manualTime && S.source !== 'walk-in'
+            && !slots.some(function (s) { return s.slot === S.time; })) S.time = null;
+        renderSlots(); update();
+      });
+  }
+  function slotInfo() { return S.time ? (slots.filter(function (s) { return s.slot === S.time; })[0] || null) : null; }
+
+  function setParty(n, fromInput) {
+    n = Math.max(1, Math.min(STAFF_MAX, parseInt(n, 10) || 1));
+    if (partyInput) {
+      if (!fromInput) partyInput.value = n;
+      partyInput.style.width = Math.max(2, String(partyInput.value || n).length) + 'ch';
+    }
+    if (n === S.party) return;
+    S.party = n; force = false;
+    var v = q('[data-nr-party-value]'); if (v && !partyInput) v.textContent = n;
+    cls(q('[data-nr-party-minus]'), 'is-off', n <= 1);
+    cls(q('[data-nr-party-plus]'), 'is-off', n >= STAFF_MAX);
+    cls(q('[data-nr-party-value]'), 'is-over', n > maxParty);
+    var quick = qa('[data-nr-group="party"] [data-nr-value]').map(function (b) { return +b.getAttribute('data-nr-value'); });
+    var hit = quick.indexOf(n) > -1 ? n : (n > Math.max.apply(null, quick) ? Math.max.apply(null, quick) : '__none');
+    setActive('party', hit);
+    loadSlots(); update();
+  }
+
+  function renderAreas() {
+    var host = q('[data-nr-areas]');
+    if (!host) return;
+    if (!host.__tpl) makeChip(host, '[data-nr-area-template]');
+    [].slice.call(host.querySelectorAll('[data-nr-area]')).forEach(function (n) { n.remove(); });
+    areas.forEach(function (a) {
+      var b = makeChip(host, '[data-nr-area-template]');
+      b.textContent = a.name;
+      b.setAttribute('data-nr-area', a.id);
+      cls(b, 'is-on', S.area === a.id);
+      b.addEventListener('click', function () {
+        S.area = S.area === a.id ? null : a.id; force = false;
+        cls(host, 'is-invalid', false);
+        renderAreas(); loadSlots(); update();
+      });
+      host.appendChild(b);
+    });
+  }
+
+  function update() {
+    var hint = q('[data-nr-availability]'), info = slotInfo();
+    if (hint) {
+      if (info && !S.manualTime) {
+        var wo = S.area ? areaName(S.area) + ' · ' : '';
+        var zuGross = S.party > maxParty || /max_party_size/.test(info.grund || '');
+        hint.textContent = info.passt
+          ? info.slot + ' Uhr · ' + wo + 'noch ' + Math.max(info.frei, 0) + ' Plätze frei'
+          : zuGross
+            ? 'Gruppe größer als üblich (max. ' + maxParty + ') – Anlegen trotzdem möglich'
+            : info.slot + ' Uhr · ' + wo + 'ausgebucht – Anlegen trotzdem möglich';
+        cls(hint, 'is-bad', !info.passt); show(hint, true);
+      } else show(hint, false);
+    }
+
+    var mail = val('email'), ok = isEmail(mail);
+    if (ok && !confirmTouched) confirm = true;
+    if (!ok) confirm = false;
+    var t = q('[data-nr-toggle="send_confirmation"]');
+    cls(t, 'is-off', !ok); cls(t, 'is-checked', confirm);
+    if (t) [].forEach.call(t.querySelectorAll('[data-nr-toggle-box]'), function (b) { cls(b, 'is-checked', confirm); cls(b, 'is-off', !ok); });
+    var sub = q('[data-nr-confirm-sub]');
+    if (sub) sub.textContent = ok ? 'An ' + mail : (sub.getAttribute('data-nr-default') || 'Geht nur mit E-Mail-Adresse');
+
+    var sum = q('[data-nr-summary]');
+    if (sum) sum.textContent = sentence();
+    if (S.source === 'walk-in') { var wt = q('[data-nr-walkin-time]'); if (wt) wt.textContent = 'Jetzt · ' + nowInTz() + ' Uhr'; }
+
+    qa('[data-nr-clear]').forEach(function (c) { show(c, !!val(c.getAttribute('data-nr-clear'))); });
+    var cnt = q('[data-nr-count="note"]'); if (cnt) cnt.textContent = (field('note') ? field('note').value.length : 0) + ' / ' + NOTE_MAX;
+    var st = q('[data-nr-source-text]'); if (st) st.textContent = SOURCE_TEXT[S.source] || S.source;
+
+    var btn = q('[data-nr-submit]');
+    if (btn && !busy) {
+      var m = missing().map(function (n) { return LABEL[n]; });
+      if (areaMissing()) m.push('Sitzbereich');
+      var full = !!(info && !info.passt);
+      var walk = S.source === 'walk-in';
+      if (walk) { full = false; }
+      cls(btn, 'is-off', (!S.time && !walk) || m.length > 0);
+      cls(btn, 'is-warn', !walk && (force || full));
+      btn.textContent = walk ? (m.length ? 'Angaben fehlen' : (btn.getAttribute('data-nr-walkin-label') || 'Eintragen'))
+        : !S.time ? 'Uhrzeit wählen'
+        : m.length ? 'Angaben fehlen'
+        : (force || full) ? 'Trotzdem anlegen'
+        : (btn.getAttribute('data-nr-default') || 'Anlegen');
+      if (sum && S.time && m.length) sum.textContent = 'Noch ausfüllen: ' + m.join(', ');
+    }
+  }
+
+  function showError(msg) {
+    var e = q('[data-nr-error]');
+    if (!e) return;
+    e.textContent = msg || '';
+    show(e, !!msg);
+    if (msg) e.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  function setSource(v) {
+    S.source = v; force = false;
+    setActive('source', v);
+    if (v === 'walk-in') { S.date = null; setDate(todayInTz(0)); S.time = nowInTz(); S.manualTime = false; }
+    paintRequired(); paintWalkin(); renderSlots(); update();
+  }
+
+  function composeNote() {
+    var n = val('note');
+    return S.tags.length ? 'Hinweise: ' + S.tags.join(', ') + (n ? '\n' + n : '') : n;
+  }
+
+  function submit() {
+    if (busy) return;
+    var btn = q('[data-nr-submit]');
+    var m = missing(), walk = S.source === 'walk-in';
+    m.forEach(function (n) { cls(field(n), 'is-invalid', true); });
+    if (m.length || (!S.time && !walk)) return;
+    if (areaMissing()) { cls(q('[data-nr-areas]'), 'is-invalid', true); return; }
+    if (walk) { S.date = todayInTz(0); S.time = nowInTz(); }
+    var wn = splitName(val('walkin_name') || val('last_name'));
+    var snap = snapshot();
+    showError('');
+    var info = slotInfo();
+    var payload = {
+      restaurant_id: rid, date: S.date, time: S.time, party_size: S.party,
+      seating_area_id: S.area, source: S.source,
+      first_name: walk ? wn.first : val('first_name'), last_name: walk ? wn.last : val('last_name'),
+      phone: walk ? '' : phoneValue(), email: walk ? '' : val('email'), note: walk ? '' : composeNote(),
+      salutation: walk ? '' : S.salutation,
+      send_confirmation: !walk && confirm,
+      force: walk || force || !!(info && !info.passt) || S.manualTime
+    };
+    startPending(payload, snap, btn);
+    resetTimer = setTimeout(reset, 450);
+  }
+
+  /* ── Verzögertes Speichern (Undo-Fenster) ─────────────── */
+  function startPending(payload, snap, btn) {
+    if (pending) commit(true);
+    var chip = window.Tavo && window.Tavo.statusChip;
+    var box = chip ? null : document.querySelector('[data-nr-undo]');
+    pending = { payload: payload, snap: snap, chip: chip, box: box,
+      timer: setTimeout(function () { commit(false); }, UNDO_MS + (chip ? 3000 : 0)) };
+    if (chip) {
+      chip.show({
+        event: 'created', trigger: btn, sheet: sheetName,
+        title: btn.getAttribute('data-status-chip-title') || 'Reservierung angelegt',
+        icon: btn.getAttribute('data-status-chip-icon') || 'check',
+        tone: btn.getAttribute('data-status-chip-tone') || 'success',
+        action: { label: btn.getAttribute('data-nr-undo-label') || 'Rückgängig', hold: UNDO_MS, onClick: undo }
+      });
+    } else if (box) {
+      var set = function (sel, v) { var el = box.querySelector(sel); if (el) el.textContent = v; };
+      set('[data-nr-undo-title]', box.getAttribute('data-nr-undo-title-text') || 'Reservierung angelegt');
+      set('[data-nr-undo-sub]', snap.S.source === 'walk-in' ? 'Walk-in, jetzt' : spokenDay(snap.S.date) + ', ' + spokenTime(snap.S.time));
+      var ub = box.querySelector('[data-nr-undo-btn]'); if (ub) show(ub, true);
+      var bar = box.querySelector('[data-nr-undo-bar]');
+      if (bar) { bar.style.transition = 'none'; bar.style.width = '100%'; void bar.offsetWidth; bar.style.transition = 'width ' + UNDO_MS + 'ms linear'; bar.style.width = '0%'; }
+      cls(box, 'is-on', true);
+      if (window.Sheet) window.Sheet.close(sheetName);
+    } else {
+      if (window.Sheet) window.Sheet.close(sheetName);
+      commit(false);
+    }
+  }
+
+  // Speichert die gemerkte Reservierung. viaBeacon = Seite wird verlassen.
+  function commit(viaBeacon) {
+    var p = pending; if (!p) return;
+    pending = null; clearTimeout(p.timer);
+    if (p.box) cls(p.box, 'is-on', false);
+    if (viaBeacon) return rpcKeepalive('staff_create_reservation', { p: p.payload });
+    db.rpc('staff_create_reservation', { p: p.payload }).then(function (res) {
+      var d = res.data || {};
+      if (res.error || !d.ok) {
+        var msg = d.message || (res.error && res.error.message) || 'Das hat nicht geklappt.';
+        if (p.chip) p.chip.show({ event: 'create_failed', title: 'Nicht gespeichert', icon: 'x', tone: 'danger', hold: 2200 });
+        restore(p.snap);
+        if (d.code === 'capacity') force = true;
+        showError(msg + (d.code === 'capacity' ? ' Nochmal tippen, um trotzdem anzulegen.' : ''));
+        if (window.Sheet) setTimeout(function () { window.Sheet.open(sheetName); }, 600);
+        return;
+      }
+      document.dispatchEvent(new CustomEvent('tavo:reservation-created', { detail: { id: d.id, reference: d.reference } }));
+    });
+  }
+
+  function undo() {
+    var p = pending; if (!p) return;
+    pending = null; clearTimeout(p.timer);
+    if (resetTimer) { clearTimeout(resetTimer); resetTimer = 0; reset(); }
+    if (p.chip) p.chip.show({ event: 'undone', title: 'Rückgängig gemacht', icon: 'check', tone: 'info', hold: 1600 });
+    if (p.box) {
+      var t = p.box.querySelector('[data-nr-undo-title]'), sub = p.box.querySelector('[data-nr-undo-sub]'), ub = p.box.querySelector('[data-nr-undo-btn]');
+      if (t) t.textContent = 'Rückgängig gemacht';
+      if (sub) sub.textContent = 'Angaben sind wieder im Formular';
+      if (ub) show(ub, false);
+      setTimeout(function () { cls(p.box, 'is-on', false); }, 1800);
+    }
+    restore(p.snap);
+    if (window.Sheet) setTimeout(function () { window.Sheet.open(sheetName); }, p.chip ? 900 : 250);
+  }
+
+  function snapshot() {
+    var f = {}; qa('[data-nr-field]').forEach(function (el) { f[el.getAttribute('data-nr-field')] = el.value; });
+    return { S: JSON.parse(JSON.stringify(S)), fields: f, country: country, confirm: confirm, confirmTouched: confirmTouched };
+  }
+  function restore(sn) {
+    S.party = 0; setParty(sn.S.party);
+    setSource(sn.S.source);
+    S.date = null; setDate(sn.S.date);
+    S.area = sn.S.area; renderAreas();
+    S.time = sn.S.time; S.manualTime = sn.S.manualTime;
+    S.salutation = sn.S.salutation; setActive('salutation', sn.S.salutation);
+    S.tags = sn.S.tags.slice();
+    qa('[data-nr-group="tags"] [data-nr-value]').forEach(function (t) { cls(t, 'is-on', S.tags.indexOf(t.getAttribute('data-nr-value')) > -1); });
+    setCountry(sn.country);
+    Object.keys(sn.fields).forEach(function (k) { var el = field(k); if (el) { el.value = sn.fields[k]; paintLabel(k); } });
+    confirm = sn.confirm; confirmTouched = sn.confirmTouched;
+    loadSlots(); update();
+  }
+  function rpcKeepalive(fn, body) {
+    if (!accessToken) return;
+    try {
+      fetch(SU + '/rest/v1/rpc/' + fn, { method: 'POST', keepalive: true,
+        headers: { apikey: window.TAVO_ANON_KEY, Authorization: 'Bearer ' + accessToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body) });
+    } catch (e) {}
+  }
+  function reset() {
+    qa('[data-nr-field]').forEach(function (f) { f.value = ''; cls(f, 'is-invalid', false); paintLabel(f.getAttribute('data-nr-field')); });
+    confirm = false; confirmTouched = false;
+    S.tags = []; qa('[data-nr-group="tags"] [data-nr-value]').forEach(function (t) { cls(t, 'is-on', false); });
+    S.salutation = ''; setActive('salutation', '');
+    S.area = null; S.manualTime = false; S.time = null; force = false;
+    var tl = q('[data-nr-time-label]'); if (tl) tl.textContent = tl.getAttribute('data-nr-default') || 'Andere Zeit';
+    cls(q('[data-nr-time-chip]'), 'is-on', false);
+    showError('');
+    guestHit = null; var gh = q('[data-nr-guest-hit]'); if (gh) { gh.__dismissedKey = null; show(gh, false); }
+    togglePanel(false); setCountry(COUNTRIES[0]);
+    S.party = 0; setParty(2);
+    S.date = null; setSource('telefon'); setDate(todayInTz(0));
+    renderAreas();
+  }
+
+  var dateInput, timeInput;
+  // Nativer Datums-/Zeit-Picker hinter einem Chip.
+  // Touch (iPhone, iPad, Android): das unsichtbare Feld liegt über dem Chip,
+  //   ein Tipp darauf öffnet den nativen Picker. showPicker() tut auf iOS nichts.
+  // Maus/Trackpad: showPicker() — sonst öffnet nur das kleine Kalender-Symbol.
+  function overlayInput(chip, type, onPick) {
+    if (!chip) return null;
+    var i = document.createElement('input');
+    i.type = type;
+    if (type === 'time') i.step = 300;
+    i.setAttribute('aria-hidden', 'true');
+    i.setAttribute('tabindex', '-1');
+    var coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+    var canPick = !coarse && typeof i.showPicker === 'function';
+    i.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;min-width:0;max-width:none;opacity:0;cursor:pointer;border:0;padding:0;margin:0;'
+      + '-webkit-appearance:none;appearance:none;background:transparent;color:transparent;font-size:16px;'
+      + (canPick ? 'pointer-events:none;' : '');
+    if (getComputedStyle(chip).position === 'static') chip.style.position = 'relative';
+    chip.style.overflow = 'hidden';
+    chip.appendChild(i);
+    var last = '';
+    function picked() { if (i.value && i.value !== last) { last = i.value; onPick(i.value); } }
+    i.addEventListener('change', picked);
+    i.addEventListener('input', picked);
+    i.addEventListener('blur', function () { last = ''; });
+    if (canPick) {
+      chip.addEventListener('click', function (e) {
+        if (!chip.contains(i)) chip.appendChild(i);
+        e.preventDefault();
+        last = '';
+        try { i.showPicker(); }
+        catch (err) { i.style.pointerEvents = 'auto'; try { i.focus(); i.click(); } catch (e2) {} }
+      });
+    }
+    return i;
+  }
+
+  function bind() {
+    document.addEventListener('submit', function (e) {
+      if (form.contains(e.target)) { e.preventDefault(); e.stopImmediatePropagation(); }
+    }, true);
+    qa('.w-form').forEach(function (w) { w.style.margin = '0'; });
+
+    form.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-nr-value]');
+      var g = b && b.closest('[data-nr-group]');
+      if (!g) return;
+      var group = g.getAttribute('data-nr-group'), v = b.getAttribute('data-nr-value');
+      if (group === 'source') setSource(v);
+      else if (group === 'day') setDate(todayInTz(+v));
+      else if (group === 'party') setParty(+v);
+      else if (group === 'salutation') { S.salutation = v; setActive('salutation', v); }
+      else if (group === 'tags') {
+        var i = S.tags.indexOf(v);
+        if (i > -1) S.tags.splice(i, 1); else S.tags.push(v);
+        cls(b, 'is-on', i < 0);
+      }
+    });
+
+    var pv = q('[data-nr-party-value]');
+    if (pv) {
+      var inp = pv.tagName === 'INPUT' ? pv : null;
+      if (!inp) {
+        inp = document.createElement('input');
+        inp.type = 'text';
+        inp.setAttribute('inputmode', 'numeric');
+        inp.setAttribute('pattern', '[0-9]*');
+        inp.setAttribute('enterkeyhint', 'done');
+        inp.setAttribute('autocomplete', 'off');
+        inp.setAttribute('aria-label', pv.getAttribute('aria-label') || 'Personen');
+        inp.setAttribute('data-nr-party-input', '');
+        inp.style.cssText = 'all:unset;box-sizing:content-box;width:2ch;min-width:2ch;text-align:center;font:inherit;color:inherit;letter-spacing:inherit;line-height:inherit;cursor:text;caret-color:currentColor;';
+        inp.value = (pv.textContent || '2').trim();
+        pv.textContent = '';
+        pv.appendChild(inp);
+      }
+      partyInput = inp;
+      inp.addEventListener('focus', function () { setTimeout(function () { inp.select(); }, 0); cls(pv, 'is-focus', true); });
+      inp.addEventListener('input', function () {
+        var d = inp.value.replace(/\D/g, '').slice(0, 3);
+        if (inp.value !== d) inp.value = d;
+        inp.style.width = Math.max(2, d.length) + 'ch';
+        if (d && +d > 0) setParty(+d, true);
+      });
+      inp.addEventListener('blur', function () { cls(pv, 'is-focus', false); inp.value = S.party; inp.style.width = Math.max(2, String(S.party).length) + 'ch'; });
+      inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } });
+    }
+
+    var minus = q('[data-nr-party-minus]'), plus = q('[data-nr-party-plus]');
+    if (minus) minus.addEventListener('click', function () { setParty(S.party - 1); });
+    if (plus) plus.addEventListener('click', function () { setParty(S.party + 1); });
+
+    dateInput = overlayInput(q('[data-nr-cal-chip]'), 'date', function (v) { setDate(v); });
+
+    var tl = q('[data-nr-time-label]'); if (tl) tl.setAttribute('data-nr-default', tl.textContent);
+    timeInput = overlayInput(q('[data-nr-time-chip]'), 'time', function (val) {
+      var v = (val || '').slice(0, 5);
+      if (!v) return;
+      S.time = v; S.manualTime = true; force = false;
+      if (tl) tl.textContent = v + ' Uhr';
+      cls(q('[data-nr-time-chip]'), 'is-on', true);
+      renderSlots(); update();
+    });
+
+    qa('[data-nr-field]').forEach(function (f) {
+      f.removeAttribute('id');
+      f.setAttribute('autocomplete', 'off');
+      var n = f.getAttribute('data-nr-field');
+      ['focus', 'blur', 'input'].forEach(function (ev) {
+        f.addEventListener(ev, function () { if (ev === 'input') cls(f, 'is-invalid', false); paintLabel(n); if (ev !== 'focus') update(); });
+      });
+      if (n === 'phone') { f.setAttribute('inputmode', 'tel'); f.addEventListener('input', function () { detectCountry(); findGuest(); }); }
+      if (n === 'email') { f.setAttribute('inputmode', 'email'); f.setAttribute('autocapitalize', 'off'); }
+      if (n === 'first_name' || n === 'last_name') f.setAttribute('autocapitalize', 'words');
+      if (n === 'last_name') f.addEventListener('input', findGuest);
+      var idx = FIELD_ORDER.indexOf(n);
+      if (idx > -1) f.setAttribute('enterkeyhint', idx < FIELD_ORDER.length - 1 ? 'next' : 'done');
+      f.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter' || f.tagName === 'TEXTAREA' || idx < 0) return;
+        e.preventDefault();
+        var next = FIELD_ORDER.slice(idx + 1).map(field).filter(Boolean)[0];
+        if (next) next.focus();
+        else { f.blur(); var b = q('[data-nr-submit]'); if (b && !b.classList.contains('is-off')) submit(); }
+      });
+      paintLabel(n);
+    });
+
+    qa('[data-nr-clear]').forEach(function (c) {
+      c.addEventListener('mousedown', function (e) { e.preventDefault(); });
+      c.addEventListener('click', function (e) {
+        e.preventDefault();
+        var n = c.getAttribute('data-nr-clear'), f = field(n);
+        if (!f) return;
+        f.value = ''; f.focus(); paintLabel(n); update();
+      });
+    });
+    var note = field('note'); if (note) note.setAttribute('maxlength', NOTE_MAX);
+
+    var ct = q('[data-nr-country-toggle]');
+    if (ct) ct.addEventListener('click', function (e) { e.preventDefault(); togglePanel(); });
+    var cs = q('[data-nr-country-search]');
+    if (cs) { cs.setAttribute('autocomplete', 'off'); cs.addEventListener('input', function () { renderCountries(cs.value); });
+      cs.addEventListener('keydown', function (e) { if (e.key === 'Enter') e.preventDefault(); }); }
+    show(q('[data-nr-country-panel]'), false);
+    setCountry(country);
+
+    var ub = document.querySelector('[data-nr-undo-btn]');
+    if (ub) ub.addEventListener('click', function (e) { e.preventDefault(); undo(); });
+    var ubox = document.querySelector('[data-nr-undo]'); if (ubox) cls(ubox, 'is-on', false);
+    addEventListener('pagehide', function () { commit(true); });
+    document.addEventListener('tavo:status-chip-hide', function (e) {
+      if (pending && pending.chip && e.detail && e.detail.event === 'created') commit(false);
+    });
+    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') commit(true); });
+    var wn = field('walkin_name');
+    if (wn) { wn.setAttribute('autocapitalize', 'words'); wn.setAttribute('enterkeyhint', 'done');
+      wn.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); wn.blur(); submit(); } }); }
+
+    var ga = q('[data-nr-guest-apply]');
+    if (ga) ga.addEventListener('click', function (e) { e.preventDefault(); applyGuest(); });
+    show(q('[data-nr-guest-hit]'), false);
+
+    var t = q('[data-nr-toggle="send_confirmation"]');
+    if (t) t.addEventListener('click', function () {
+      if (t.classList.contains('is-off')) return;
+      confirm = !confirm; confirmTouched = true; update();
+    });
+
+    var sub = q('[data-nr-confirm-sub]'); if (sub) sub.setAttribute('data-nr-default', sub.textContent);
+    var btn = q('[data-nr-submit]');
+    if (btn) {
+      btn.setAttribute('data-nr-default', btn.textContent.trim());
+      btn.addEventListener('click', function (e) { e.preventDefault(); if (!btn.classList.contains('is-off')) submit(); });
+    }
+
+    document.addEventListener('sheet:open', function (e) {
+      if (!e.detail || e.detail.name !== sheetName) return;
+      if (!S.date) setDate(todayInTz(0)); else loadSlots();
+      qa('[data-nr-group]').forEach(placePill);
+      paintWalkin();
+    });
+    addEventListener('resize', function () { qa('[data-nr-group]').forEach(placePill); }, { passive: true });
+  }
+
+  function gate(msg) {
+    var g = document.createElement('div');
+    g.setAttribute('data-nr-gate', '');
+    g.style.cssText = 'position:fixed;left:16px;right:16px;bottom:16px;z-index:9999;padding:14px 16px;border-radius:16px;background:#0d0d0d;color:#fff;font:14px Geist,system-ui,sans-serif';
+    g.innerHTML = msg;
+    document.body.appendChild(g);
+  }
+
+  async function boot() {
+    form = document.querySelector('[data-nr-form]');
+    if (!form) return;
+    root = document.querySelector('[data-nr-root]') || form;
+    var sh = form.closest('[data-sheet]') || (form.hasAttribute('data-sheet') ? form : null);
+    sheetName = sh ? sh.getAttribute('data-sheet') : 'neu';
+    if (!window.supabase) return console.error('[tavo-neu] supabase-js fehlt');
+
+    db = window.tavoDB || window.supabase.createClient(SU, window.TAVO_ANON_KEY);
+    bind();
+    show(q('[data-nr-slots-empty]'), false);
+    show(q('[data-nr-availability]'), false);
+    show(q('[data-nr-error]'), false);
+    setActive('source', 'telefon');
+    setActive('salutation', '');
+    paintRequired();
+    paintWalkin();
+    update();
+
+    var s = (await db.auth.getSession()).data;
+    if (!s.session) return gate('Bitte zuerst einloggen: <a href="/login" style="color:#fff;font-weight:600">zum Login</a>');
+    var m = await db.from('memberships').select('restaurant_id').eq('user_id', s.session.user.id).limit(1);
+    if (m.error || !m.data || !m.data.length) return gate('Kein Restaurant für diesen Account gefunden.');
+    rid = m.data[0].restaurant_id;
+    accessToken = s.session.access_token;
+    db.auth.onAuthStateChange(function (_e, ses) { if (ses) accessToken = ses.access_token; });
+
+    var r = await db.from('restaurants').select('timezone,max_party_size').eq('id', rid).maybeSingle();
+    if (r.data) { tz = r.data.timezone || tz; maxParty = r.data.max_party_size || maxParty; }
+
+    var a = await db.from('seating_areas').select('id,name').eq('restaurant_id', rid)
+      .eq('active', true).order('position', { ascending: true });
+    areas = a.data || [];
+    renderAreas();
+
+    var sn = await db.from('snippets').select('name,position').eq('restaurant_id', rid).eq('active', true)
+      .contains('forms', ['hinweis']).order('position', { ascending: true });
+    var tagHost = q('[data-nr-group="tags"]');
+    if (!sn.error && sn.data && sn.data.length && tagHost) {
+      var tplTag = tagHost.querySelector('[data-nr-value]');
+      if (tplTag) {
+        var plus = /^\+\s/.test(tplTag.textContent.trim());
+        tplTag = tplTag.cloneNode(true);
+        [].slice.call(tagHost.children).forEach(function (n) { n.remove(); });
+        sn.data.forEach(function (x) {
+          var t = tplTag.cloneNode(true);
+          t.setAttribute('data-nr-value', x.name); t.textContent = (plus ? '+ ' : '') + x.name; cls(t, 'is-on', false);
+          tagHost.appendChild(t);
+        });
+      }
+    }
+
+    S.party = 0; setParty(2);
+    setDate(todayInTz(0));
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();
+</script>

@@ -1,0 +1,242 @@
+<script>
+/* ============================================================
+   tavo — Suche v1 (Supabase)
+   Ersetzt die alte CMS-Suchliste. Sucht sofort in allen geladenen
+   Reservierungen und ab 3 Zeichen zusätzlich in der Historie in
+   Supabase (älter als das Ladefenster).
+
+   Durchsucht: Name · Reservierungsnummer · Telefon · E-Mail ·
+   Bereich · Notiz · Datum (TT.MM.JJJJ) · Wochentag
+   Mehrere Wörter = alle müssen passen ("anna fr" · "18.09 terrasse")
+   Sortierung: beste Treffer zuerst (Name beginnt mit …), dann
+   anstehende nach Datum, dann vergangene (neueste zuerst).
+
+   ── IM DESIGNER ─────────────────────────────────────────────
+   Im [data-live-search]-Overlay:
+     <div data-res-search-list
+          data-res-item-class="collection-item-16"   Klasse je Zeile
+          data-res-page-size="30"></div>              optional
+   Die Zeilen nutzen die normale [data-res-template]-Vorlage.
+   Zustände wie bisher über data-live-search-state am Overlay:
+     idle · results · empty
+   Weiter nutzbar: data-live-search-skeleton, -not-found, -count,
+   -query, -status
+
+   Braucht: Core v4 + Reservierungen v4.1
+   ============================================================ */
+(function () {
+  'use strict';
+
+  var MIN_ARCHIV = 3;
+  var norm = function (s) {
+    return String(s || '').toLowerCase().normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '').replace(/ß/g, 'ss');
+  };
+
+  var hayCache = new WeakMap();
+  function hay(r, kit) {
+    var area = r.seating_areas && r.seating_areas.name;
+    var sig = [r.updated_at, r.status, r.reserved_at, r.guest_name, r.reference,
+               r.guest_phone, r.guest_email, r.note, area].join('\u0001');
+    var c = hayCache.get(r);
+    if (c && c.sig === sig) return c;
+    var w = kit.wall(Date.parse(r.reserved_at));
+    var name = norm(r.guest_name);
+    c = {
+      sig: sig,
+      name: name,
+      all: [name, norm(r.reference), norm(r.guest_email),
+            String(r.guest_phone || '').replace(/\D/g, ''),
+            norm(area), norm(r.note), kit.fmtDate(w),
+            norm(kit.WD_LONG[w.getDay()])].join(' \u0002 ')
+    };
+    hayCache.set(r, c);
+    return c;
+  }
+
+  function terme(q) {
+    return norm(q).split(/\s+/).filter(Boolean).map(function (t) {
+      // Telefonnummern: nur Ziffern vergleichen ("0171 / 23" → "017123")
+      return /^[+\d][\d\s\/-]{2,}$/.test(t) ? t.replace(/\D/g, '') : t;
+    });
+  }
+
+  function treffer(rows, ts, kit) {
+    var out = [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i], h = hay(r, kit), ok = true;
+      for (var j = 0; j < ts.length; j++) {
+        if (h.all.indexOf(ts[j]) < 0) { ok = false; break; }
+      }
+      if (!ok) continue;
+      var t0 = ts[0];
+      var score = h.name.indexOf(t0) === 0 ? 3 : (' ' + h.name).indexOf(' ' + t0) > -1 ? 2 : 1;
+      out.push({ r: r, score: score });
+    }
+    return out;
+  }
+
+  function init() {
+    var R = window.tavoReservierungen;
+    if (!R || !R.kit) return;
+    var kit = R.kit;
+
+    document.querySelectorAll('[data-live-search]').forEach(function (root) {
+      var host = root.querySelector('[data-res-search-list]');
+      if (!host || host._tavoSearch) return;
+
+      var group = root.getAttribute('data-search-overlay');
+      var input = root.querySelector('[data-live-search-input]') ||
+        (group && document.querySelector('[data-search-bar="' + group + '"] [data-search-input]'));
+      if (!input) return console.warn('[tavo] Suche: kein Eingabefeld gefunden');
+
+      var queryEls = root.querySelectorAll('[data-live-search-query]');
+      var countEls = root.querySelectorAll('[data-live-search-count]');
+      var status   = root.querySelector('[data-live-search-status]');
+      var skeleton = root.querySelector('[data-live-search-skeleton]');
+
+      // Skeleton-Zeilen klonen (vorher machte das List.js-Teil)
+      if (skeleton && skeleton.firstElementChild) {
+        var n = parseInt(skeleton.getAttribute('data-live-search-skeleton'), 10) || 3;
+        var tpl = skeleton.firstElementChild;
+        tpl.setAttribute('data-skeleton-row', '');
+        tpl.style.setProperty('--i', 0);
+        while (skeleton.children.length > n) skeleton.lastElementChild.remove();
+        for (var i = skeleton.children.length; i < n; i++) {
+          var c = tpl.cloneNode(true);
+          c.style.setProperty('--i', i);
+          skeleton.appendChild(c);
+        }
+        skeleton.setAttribute('aria-hidden', 'true');
+      }
+
+      var pageAttr = host.getAttribute('data-res-page-size');
+      var L = {
+        host: host,
+        key: 'suche',
+        itemClass: host.getAttribute('data-res-item-class') || '',
+        cancelClass: host.getAttribute('data-res-cancelled-class') || 'is-storniert',
+        pageSize: pageAttr === null ? 30 : Math.max(0, parseInt(pageAttr, 10) || 0),
+        nodes: new Map(),
+        matches: [],
+        limit: 0,
+        sentinel: null
+      };
+      L.limit = L.pageSize;
+      host.textContent = '';
+      host.style.display = 'none';
+      kit.attachSentinel(L);
+
+      var S = { L: L, archiv: [], token: 0, wartet: false, zeilen: new Map() };
+      host._tavoSearch = S;
+
+      function setText(nodes, t) {
+        nodes.forEach(function (el) { if (el.textContent !== t) el.textContent = t; });
+      }
+
+      function zustand(state, hits) {
+        root.setAttribute('data-live-search-state', state);
+        host.style.display = state === 'results' ? '' : 'none';
+        setText(countEls, hits == null ? '' : String(hits));
+        if (status) status.textContent =
+          state === 'results' ? hits + (hits === 1 ? ' Ergebnis' : ' Ergebnisse') :
+          state === 'empty' ? 'Keine Ergebnisse' : '';
+      }
+
+      function suchen() {
+        var q = input.value.trim();
+        setText(queryEls, q);
+        if (!q) {
+          S.token++; S.archiv = []; S.wartet = false;
+          L.matches = []; kit.reconcile(L);
+          return zustand('idle', null);
+        }
+
+        var ts = terme(q);
+        var store = window.tavoStore;
+        var lokal = store ? store.all() : [];
+        var ids = new Set(lokal.map(function (r) { return r.id; }));
+        var alle = lokal.concat(S.archiv.filter(function (r) { return !ids.has(r.id); }));
+        var hits = treffer(alle, ts, kit);
+
+        var nowMs = Date.now();
+        var now = kit.wall(nowMs);
+        var heute = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        var abgeleitet = hits.map(function (h) {
+          var d = kit.derive(h.r, nowMs);
+          d.score = h.score;
+          d.kommend = d.day >= heute;
+          return d;
+        });
+        abgeleitet.sort(function (a, b) {
+          if (a.score !== b.score) return b.score - a.score;
+          if (a.kommend !== b.kommend) return a.kommend ? -1 : 1;
+          return a.kommend ? a.start - b.start : b.start - a.start;
+        });
+
+        S.zeilen = new Map(abgeleitet.map(function (d) { return [d.id, d.raw]; }));
+        L.matches = abgeleitet;
+        L.limit = L.pageSize;
+        kit.reconcile(L);
+
+        if (abgeleitet.length) zustand('results', abgeleitet.length);
+        else zustand(S.wartet ? 'idle' : 'empty', 0);
+      }
+
+      /* Historie außerhalb des Ladefensters direkt in Supabase. */
+      function archivSuchen() {
+        var q = input.value.trim().replace(/[,()*%"\\]/g, ' ').trim();
+        var token = ++S.token;
+        var db = window.tavoDB;
+        var rid = window.tavoStore && window.tavoStore.restaurantId;
+        if (q.length < MIN_ARCHIV || !db || !rid) { S.archiv = []; S.wartet = false; return; }
+
+        var pat = '*' + q.split(/\s+/)[0] + '*';   // erstes Wort serverseitig, Rest filtert lokal
+        S.wartet = true;
+        db.from('reservations').select('*,seating_areas(name)')
+          .eq('restaurant_id', rid)
+          .or('guest_name.ilike."' + pat + '",reference.ilike."' + pat + '",' +
+              'guest_email.ilike."' + pat + '",guest_phone.ilike."' + pat + '"')
+          .order('reserved_at', { ascending: false })
+          .limit(50)
+          .then(function (res) {
+            if (token !== S.token) return;          // längst weitergetippt
+            S.wartet = false;
+            if (res.error) { console.warn('[tavo] Suche:', res.error.message); S.archiv = []; }
+            else S.archiv = res.data;
+            suchen();
+          });
+      }
+
+      var t1, t2;
+      input.addEventListener('input', function () {
+        clearTimeout(t1); clearTimeout(t2);
+        t1 = setTimeout(suchen, 60);
+        t2 = setTimeout(archivSuchen, 300);
+      });
+
+      // Klick auf ein Ergebnis → Detail-Sheet (liegt über der Suche)
+      host.addEventListener('click', function (e) {
+        var item = e.target.closest('[data-res-item]');
+        if (!item || !host.contains(item)) return;
+        var id = item.getAttribute('data-res-id');
+        var row = (window.tavoStore && window.tavoStore.get(id)) || S.zeilen.get(id);
+        if (!row) return;
+        e.preventDefault();
+        document.dispatchEvent(new CustomEvent('tavo:open', { detail: row }));
+      });
+
+      // Live-Daten: offene Suche aktualisiert sich mit
+      document.addEventListener('tavo:data', function () {
+        if (input.value.trim()) requestAnimationFrame(suchen);
+      });
+
+      zustand('idle', null);
+      window.tavoSuche = { suchen: suchen, root: root };
+    });
+  }
+
+  if (window.tavoReservierungen && window.tavoReservierungen.kit) init();
+  else document.addEventListener('tavo:ready', init);
+})();
+</script>

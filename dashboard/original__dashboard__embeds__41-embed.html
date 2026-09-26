@@ -1,0 +1,631 @@
+<style>
+/* tavo — Push-Seite: Grundgerüst (Aussehen über die Klassen im Designer) */
+[data-res-push]{position:fixed;top:0;right:0;bottom:0;width:100vw;z-index:100;visibility:hidden;transform:translate3d(100%,0,0);overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;will-change:transform;overflow-anchor:none}
+[data-res-push]::before{content:"";position:absolute;top:0;left:0;width:1px;height:calc(100% + 1px);pointer-events:none}
+[data-res-push-overlay]{position:fixed;inset:0;z-index:99;background:#000;opacity:0;pointer-events:none}
+html[data-res-push-open][data-res-push-panel] [data-res-push-overlay]{pointer-events:auto}
+[data-res-push][data-res-push-mode="panel"]{width:min(460px,100vw);box-shadow:-24px 0 60px rgba(0,0,0,.12)}
+/* Initialen-Kreis auf weißer Tagesbox sichtbar machen */
+.res-day-box .guest-icon-reservierung-offen{background-color:#f1f1f3}
+[data-res-months]{scrollbar-width:none}
+[data-res-months]::-webkit-scrollbar{display:none}
+[data-res-hero-parts]{display:flex;align-items:flex-start;flex-wrap:nowrap;white-space:nowrap}
+[data-res-hero-parts]>*{line-height:1.2em}
+/* Push-Liste: echte Zeilenhöhen statt geschätzter (content-visibility), sonst springt das Nachladen */
+[data-res-push] [data-res-item]{content-visibility:visible;contain-intrinsic-size:none}
+/* Monatsleiste mit gleitender Pille */
+[data-res-months]{position:relative}
+[data-res-month]{position:relative;z-index:1}
+[data-res-month-pill]{position:absolute;left:0;top:0;z-index:0;pointer-events:none;will-change:transform,width}
+[data-res-months-pill] [data-res-month].is-on{background-color:transparent!important;color:var(--res-pill-text,inherit)!important}
+[data-res-months-pill] [data-res-month]{transition:color .3s ease}
+/* Nur im Webflow-Designer: Push-Seite und Vorlagen sichtbar machen */
+html.wf-design-mode [data-res-push]{position:relative!important;visibility:visible!important;transform:none!important;inset:auto!important;width:100%!important;height:auto!important;z-index:auto!important;overflow:visible!important}
+html.wf-design-mode .res-templates{display:block!important}
+html.wf-design-mode [data-res-month-pill]{position:static;display:inline-block;min-width:80px;min-height:36px}
+</style>
+<script>
+/* ============================================================
+   tavo — „Alle anzeigen" als Push-Seite v2.11   (braucht Reservierungen v4.5)
+   Wie bei Revolut: Die Liste schiebt sich von rechts rein, das
+   Dashboard (inkl. Navbar und Tab-Pille) weicht nach links aus und
+   wird abgedunkelt. Ab 1367 px: Panel von rechts, Dashboard bleibt stehen
+   (iPad Pro 12,9" hoch und quer bekommt also die Vollbild-Seite).
+
+   LISTE (Dashboard)   data-res-limit="5"
+   KNOPF               data-res-more  |  data-res-more="heute"
+                       data-res-more-text="Alle {count} Reservierungen anzeigen"
+                       [data-res-more-label] · [data-res-more-wrap]
+                       data-res-more-title="Eigener Titel"   (optional)
+   SEITE  [data-res-push]
+     [data-res-sheet-list]   Liste (schläft, solange die Seite zu ist)
+     [data-res-more-title] · [data-res-more-sub] · [data-res-more-empty]
+     [data-res-push-back]    Zurück
+     Einstellungen am [data-res-push]:
+       data-res-push-shift="24"   wie weit das Dashboard ausweicht (vw)
+       data-res-push-dim="0.35"   Abdunkeln des Dashboards
+       data-res-push-dur="640"    rein (ms) · data-res-push-out="520" raus
+       data-res-push-ease="cubic-bezier(.22,1,.36,1)"   (sanft auslaufend)
+       data-res-push-panel="1367" ab dieser Breite Panel statt Vollbild
+       data-res-push-swipe="false"   Zurückwischen abschalten
+       data-res-push-root="…"     was mitgeschoben wird (CSS-Selektor)
+       data-res-push-hide="…"     was beim Push ausgeblendet wird
+                                  (Standard seit v2.6: nichts — Navbar, Tab-
+                                  Pille und alles Fixierte bleiben stehen)
+   v2.1: Geblurrte Ebenen (backdrop-filter) werden nicht mehr
+   mitgeschoben, sondern ausgeblendet — das war das Ruckeln. Wischen
+   läuft über requestAnimationFrame, Browser-Verlauf erst am Ende.
+   HERO (wie Revolut, zeigt den Tag, der gerade oben steht)
+     [data-res-hero-count]   Zahl — rollt Ziffer für Ziffer (Zählwerk)
+     [data-res-hero-unit]    „Reservierung" / „Reservierungen"
+     [data-res-hero-date]    „Montag, 28. September" — rollt hoch/runter
+     einzeln (v2.5, in einem [data-res-hero-parts]-Container):
+     [data-res-hero-weekday] „Montag" / „Heute" / „Morgen" — Schieber
+     [data-res-hero-day]     „28" — Zählwerk wie die Reservierungszahl
+     [data-res-hero-month]   „September" — Schieber
+     [data-res-hero-year]    „2025" — nur sichtbar, wenn nicht dieses Jahr
+     [data-res-push-head]    Kopf; wo er endet, zählt als „oben"
+     .res-push-header        (v2.10) sticky Kopf — seine Unterkante zählt als „oben"
+                             (auch [data-res-push-header] / [res-push-header])
+     Vorlagen im Designer (v2.8, optional):
+       in Zahl/Tag: [data-res-odo-col] > [data-res-odo-digit]  (Ziffernspalte)
+       in Wochentag/Monat: [data-res-slot-line]                (Rollzeile)
+       Höhe kommt aus deinem Styling (wird gemessen).
+   MONATSLEISTE (v2.3)
+     [data-res-months]       Leiste; darin [data-res-month-template] (Monat)
+     [data-res-month-pill]   gleitende Pille (v2.8) — sonst .is-on-Hintergrund
+                             Schriftfarbe der Pille = Textfarbe des aktiven Monats (v2.10)
+       data-res-months-dur="560" · data-res-months-ease="cubic-bezier(.34,1.4,.64,1)"
+     aktiver Monat bekommt .is-on · Tippen springt zum Monat
+     data-res-push-months="alle"   bei welchen Kategorien (Komma-Liste)
+   AGENDA (v2.9)
+     data-res-push-start="alle"    diese Kategorien öffnen bei heute (bzw. dem
+                                   nächsten Tag mit Buchungen); Vergangenes lädt
+                                   beim Hochscrollen nach, ohne dass etwas springt
+   [data-res-push-overlay]  Abdunkel-Ebene (Klick schließt)
+   [data-res-push-move]     auf beliebigen Elementen: werden mitgeschoben
+
+   Zurück: Knopf, Wischen nach rechts, Browser-/Android-Zurück, Esc.
+   v2.4/2.5: Übernimmt Safari die Rand-Geste, schnappt die Seite
+   zurück und schließt nach Safaris Animation sofort. Eigenes Wischen
+   schließt ab 30 % Weg oder mit kurzem schnellen Wisch.
+   Live: Liste und Kopf aktualisieren sich bei jeder Datenänderung.
+   ============================================================ */
+(function () {
+  'use strict';
+  var A = 'data-res-push';
+  var ROOT_DEF = '.interface-responsive-wrapper,[' + A + '-move]';
+  var HIDE_DEF = '';   // v2.6: Fixiertes bleibt stehen
+  var page, dim, cur = null, state = 'closed', inHistory = false, closeTimer = null;
+  var R = [], H = [], raf = 0, pending = null, backPending = false, heroKey = '', heroN = -1, heroRaf = 0;
+  var ROLL = 'cubic-bezier(.22,.61,.24,1)';
+  var MONTHS = ['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
+  var monthSig = '', activeMonth = '', monthLock = null, monthT = 0, upBusy = false;
+  var UA = navigator.userAgent;
+  var NATIVE_SWIPE = /iP(hone|ad|od)/.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+    || (/Safari/.test(UA) && !/Chrome|Chromium|CriOS|FxiOS|Edg|Android/.test(UA));
+  var LH = 1.2;   // Zeilenhöhe der Rollfenster in em
+
+  function api() { return window.tavoReservierungen; }
+  function lists() { var a = api(); return a && a.lists ? a.lists() : []; }
+  function show(el, on) { if (!el) return; var v = on ? '' : 'none'; if (el.style.display !== v) el.style.display = v; }
+  function text(el, v) { if (el && el.textContent !== v) el.textContent = v; }
+  function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+  function num(k, d) { var v = parseFloat(page.getAttribute(A + '-' + k)); return isNaN(v) ? d : v; }
+  function ease() { return page.getAttribute(A + '-ease') || 'cubic-bezier(.22,1,.36,1)'; }
+  function panel() { return matchMedia('(min-width:' + num('panel', 1367) + 'px)').matches; }
+  function swipeOn() { var v = (page.getAttribute(A + '-swipe') || '').trim().toLowerCase(); return ['false', 'off', '0', 'no', 'nein'].indexOf(v) < 0; }
+  /* Modus ans Element schreiben — das CSS richtet sich danach, nicht nach einer festen Media-Query. */
+  function applyMode() {
+    var p = panel();
+    page.setAttribute(A + '-mode', p ? 'panel' : 'full');
+    if (p) document.documentElement.setAttribute(A + '-panel', ''); else document.documentElement.removeAttribute(A + '-panel');
+  }
+  function reduced() { return matchMedia('(prefers-reduced-motion: reduce)').matches; }
+  function sheetOnTop() { return window.Sheet && Sheet.top && Sheet.top(); }
+
+  function init() {
+    if (page) return !!page;
+    page = document.querySelector('[' + A + ']');
+    dim = document.querySelector('[' + A + '-overlay]');
+    if (!page) return false;
+    if (!dim) { dim = document.createElement('div'); dim.setAttribute(A + '-overlay', ''); document.body.appendChild(dim); }
+    page.setAttribute('aria-hidden', 'true');
+    page.setAttribute('inert', '');
+    applyMode();
+    bindSwipe();
+    page.addEventListener('scroll', function () {
+      if (state !== 'open') return;
+      if (monthLock) { clearTimeout(monthT); monthT = setTimeout(unlockMonth, 160); }
+      else maybeLoadEarlier();
+      heroSoon();
+    }, { passive: true });
+    return true;
+  }
+
+  /* ── Knöpfe ─────────────────────────────────────────────── */
+  function srcFor(btn) {
+    if (btn._resSrc && btn._resSrc.host.isConnected && lists().indexOf(btn._resSrc) > -1) return btn._resSrc;
+    var key = (btn.getAttribute('data-res-more') || '').trim();
+    var ls = lists().filter(function (L) { return !L.inSheet && (!key || L.key === key); });
+    for (var p = btn.parentElement; p; p = p.parentElement)
+      for (var i = 0; i < ls.length; i++) if (p.contains(ls[i].host)) return (btn._resSrc = ls[i]);
+    return null;
+  }
+  function paintButtons() {
+    [].forEach.call(document.querySelectorAll('[data-res-more]'), function (btn) {
+      var L = srcFor(btn); if (!L) return;
+      var total = L.matches.length, cap = L.cap || 0;
+      var sh = L.host.getAttribute('data-res-rendered');   // v2.11: auch wenn oben Einträge fehlen (Start „now“)
+      show(btn.closest('[data-res-more-wrap]') || btn, cap > 0 && total > (sh == null ? cap : Math.min(cap, +sh)));
+      var tpl = btn.getAttribute('data-res-more-text') || 'Alle {count} Reservierungen anzeigen';
+      var lab = btn.querySelector('[data-res-more-label]') || (btn.children.length ? null : btn);
+      text(lab, tpl.split('{count}').join(total).split('{rest}').join(Math.max(0, total - cap)));
+    });
+  }
+
+  /* ── Kopf der Seite ─────────────────────────────────────── */
+  function paintHead() {
+    if (!cur) return;
+    var rows = cur.target.matches, live = rows.filter(function (d) { return !d.cancelled; });
+    var guests = live.reduce(function (n, d) { return n + (d.guests || 0); }, 0), abs = rows.length - live.length;
+    var defs = (api() && api().defaults) || {};
+    var title = cur.btn.getAttribute('data-res-more-title') || (defs[cur.src.key] && defs[cur.src.key].kicker) || 'Reservierungen';
+    [].forEach.call(page.querySelectorAll('[data-res-more-title]'), function (el) { text(el, title); });
+    [].forEach.call(page.querySelectorAll('[data-res-more-sub]'), function (el) {
+      text(el, rows.length ? plural(live.length, 'Reservierung', 'Reservierungen') + ' · ' + plural(guests, 'Gast', 'Gäste')
+        + (abs ? ' · ' + plural(abs, 'Absage', 'Absagen') : '') : '');
+    });
+    [].forEach.call(page.querySelectorAll('[data-res-more-empty]'), function (el) { show(el, !rows.length); });
+  }
+
+  /* ── Hero: Zählwerk + rollendes Datum ────────────────────── */
+  function odo(el, value, instant) {
+    var s = String(value);
+    if (el._odo === s && !instant) return;
+    el._odo = s;
+    if (el._tpl === undefined) {
+      var t = el.querySelector('[data-res-odo-col]');
+      el._tpl = t ? t.cloneNode(true) : null;
+    }
+    if (el._len !== s.length) {
+      el._len = s.length; el.textContent = ''; el._stacks = [];
+      el.style.display = 'inline-flex';
+      for (var i = 0; i < s.length; i++) {
+        var col, dt = null;
+        if (el._tpl) { col = el._tpl.cloneNode(true); dt = col.querySelector('[data-res-odo-digit]'); col.textContent = ''; }
+        else { col = document.createElement('span'); col.style.lineHeight = LH + 'em'; }
+        col.style.display = 'inline-block'; col.style.overflow = 'hidden'; col.style.verticalAlign = 'top';
+        var st = document.createElement('span');
+        st.style.cssText = 'display:block;will-change:transform';
+        for (var d = 0; d < 10; d++) {
+          var x = dt ? dt.cloneNode(true) : document.createElement('span');
+          x.textContent = d; x.style.display = 'block'; x.style.width = 'max-content';
+          if (!dt) x.style.height = LH + 'em';
+          st.appendChild(x);
+        }
+        col.appendChild(st); el.appendChild(col); el._stacks.push(st);
+      }
+      el.offsetWidth;   // neu gebaut: erst messen, dann rollen
+    }
+    el.setAttribute('aria-label', s);
+    var h = el._stacks[0] && el._stacks[0].firstChild ? el._stacks[0].firstChild.getBoundingClientRect().height : 0;
+    var hv = h || LH, u = h ? 'px' : 'em';   // Höhe aus dem Designer-Styling
+    el._stacks.forEach(function (st, i) {
+      var col = st.parentNode, still = instant || reduced(), delay = ((s.length - 1 - i) * 40) + 'ms';
+      var cw = st.children[+s[i]].getBoundingClientRect().width;   // Spalte so breit wie die aktuelle Ziffer
+      col.style.height = hv + u;
+      col.style.transition = still ? 'none' : 'width 620ms ' + ROLL + ' ' + delay;
+      if (cw) col.style.width = cw + 'px';
+      st.style.transition = still ? 'none' : 'transform 620ms ' + ROLL + ' ' + delay;
+      st.style.transform = 'translateY(' + (-(+s[i]) * hv) + u + ')';
+    });
+  }
+  /* Schieber: harter Wechsel wie beim Zählwerk (kein Überblenden). */
+  function rollText(el, txt, dir, instant) {
+    if (el._txt === txt && !instant) return;
+    var now = performance.now(), quick = el._rollAt && now - el._rollAt < 220;
+    var first = el._txt === undefined || instant || reduced() || quick;
+    el._txt = txt; el._rollAt = now;
+    if (!el._slot) {
+      el._slot = true;
+      var lt = el.querySelector('[data-res-slot-line]');
+      el._lineTpl = lt ? lt.cloneNode(true) : null;
+      el.textContent = '';
+      el.style.display = 'inline-grid'; el.style.overflow = 'hidden'; el.style.verticalAlign = 'top';
+      if (!el._lineTpl) { el.style.height = LH + 'em'; el.style.lineHeight = LH + 'em'; }
+    }
+    [].slice.call(el.children).forEach(function (c) { if (c !== el._cur) { if (c._anim) c._anim.cancel(); c.remove(); } });
+    var old = el._cur && el._cur.parentNode === el ? el._cur : null;
+    var w0 = old ? old.getBoundingClientRect().width : 0;
+    if (el._wAnim) { el._wAnim.cancel(); el._wAnim = null; }
+    var nu = el._lineTpl ? el._lineTpl.cloneNode(true) : document.createElement('span');
+    nu.textContent = txt;
+    nu.style.gridArea = '1/1'; nu.style.whiteSpace = 'nowrap'; nu.style.display = 'block'; nu.style.justifySelf = 'start';
+    el.appendChild(nu); el._cur = nu;
+    if (first || !old) { if (old) { if (old._anim) old._anim.cancel(); old.remove(); } return; }
+    var w1 = nu.getBoundingClientRect().width;   // Breite gleitet mit, nichts springt
+    if (Math.abs(w1 - w0) > 0.5) el._wAnim = el.animate([{ width: w0 + 'px' }, { width: w1 + 'px' }], { duration: 620, easing: ROLL });
+    if (old._anim) old._anim.cancel();
+    var o = { duration: 620, easing: ROLL };
+    nu._anim = nu.animate([{ transform: 'translateY(' + (dir * 100) + '%)' }, { transform: 'none' }], o);
+    old._anim = old.animate([{ transform: 'none' }, { transform: 'translateY(' + (-dir * 100) + '%)' }], { duration: 620, easing: ROLL, fill: 'forwards' });
+    old._anim.onfinish = function () { if (old.parentNode) old.remove(); };
+  }
+  function heroParts(key) {
+    var p = key.split('-'), d = new Date(+p[0], +p[1] - 1, +p[2]);
+    var k = api() && api().kit, now = k ? k.wall(Date.now()) : new Date();
+    var today = k ? k.dayKey(now) : '', t = new Date(now); t.setDate(t.getDate() + 1);
+    var tomorrow = k ? k.dayKey(t) : '';
+    var WDL = (k && k.WD_LONG) || ['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag'];
+    return {
+      weekday: key === today ? 'Heute' : key === tomorrow ? 'Morgen' : WDL[d.getDay()],
+      day: d.getDate(), month: MONTHS[d.getMonth()],
+      year: d.getFullYear() !== now.getFullYear() ? String(d.getFullYear()) : ''
+    };
+  }
+  function groups() { return cur ? [].slice.call(cur.target.host.querySelectorAll('[data-res-group-head]')) : []; }
+  function heroDate(key) {
+    var p = key.split('-'), d = new Date(+p[0], +p[1] - 1, +p[2]);
+    var long = api() && api().dayLong ? api().dayLong(d) : key;
+    var k = api() && api().kit, today = k ? k.dayKey(k.wall(Date.now())) : '';
+    var t = k ? k.wall(Date.now()) : new Date(); t.setDate(t.getDate() + 1);
+    var tomorrow = k ? k.dayKey(t) : '';
+    return key === today ? 'Heute, ' + long.split(', ')[1] : key === tomorrow ? 'Morgen, ' + long.split(', ')[1] : long;
+  }
+  function paintHero(instant) {
+    if (!cur) return;
+    var gs = groups();
+    var line = headBottom() + 24, idx = 0;
+    for (var i = 0; i < gs.length; i++) { if (gs[i].getBoundingClientRect().top <= line) idx = i; else break; }
+    var L = cur.target, atEnd = page.scrollTop + page.clientHeight >= page.scrollHeight - 2;
+    if (atEnd && page.scrollTop > 0 && (!(L.limit > 0) || L.limit >= L.matches.length)) idx = gs.length - 1;
+    var g = gs[idx];
+    if (g && !monthLock) markMonth(g.getAttribute('data-res-group-date').slice(0, 7), !instant);
+    var n = g ? +g.getAttribute('data-res-group-count') : 0;
+    var key = g ? g.getAttribute('data-res-group-date') : '';
+    if (!instant && key === heroKey && n === heroN) return;
+    var dir = key >= heroKey ? 1 : -1;
+    heroKey = key; heroN = n;
+    [].forEach.call(page.querySelectorAll('[data-res-hero-count]'), function (el) { odo(el, n, instant); });
+    [].forEach.call(page.querySelectorAll('[data-res-hero-unit]'), function (el) { text(el, n === 1 ? 'Reservierung' : 'Reservierungen'); });
+    [].forEach.call(page.querySelectorAll('[data-res-hero-date]'), function (el) { rollText(el, key ? heroDate(key) : '', dir, instant); });
+    var hp = key ? heroParts(key) : { weekday: '', day: '', month: '', year: '' };
+    [].forEach.call(page.querySelectorAll('[data-res-hero-weekday]'), function (el) { rollText(el, hp.weekday, dir, instant); });
+    [].forEach.call(page.querySelectorAll('[data-res-hero-month]'), function (el) { rollText(el, hp.month, dir, instant); });
+    [].forEach.call(page.querySelectorAll('[data-res-hero-day]'), function (el) { if (hp.day !== '') odo(el, hp.day, instant); });
+    [].forEach.call(page.querySelectorAll('[data-res-hero-year]'), function (el) {
+      text(el, hp.year); show(el.closest('[data-res-hero-year-wrap]') || el, !!hp.year);
+    });
+  }
+  function heroSoon() {
+    if (heroRaf) return;
+    heroRaf = requestAnimationFrame(function () { heroRaf = 0; paintHero(false); });
+  }
+
+  /* ── Monatsleiste ───────────────────────────────────────── */
+  function monthsOn() {
+    var keys = (page.getAttribute(A + '-months') || 'alle').split(',').map(function (k) { return k.trim(); });
+    return !!cur && keys.indexOf(cur.src.key) > -1;
+  }
+  function monthLabel(ym) {
+    var p = ym.split('-'), k = api() && api().kit, y = k ? k.wall(Date.now()).getFullYear() : new Date().getFullYear();
+    return MONTHS[+p[1] - 1] + (+p[0] !== y ? ' ' + p[0] : '');
+  }
+  function buildMonths() {
+    var bar = page.querySelector('[data-res-months]'); if (!bar) return;
+    if (bar._tpl === undefined) {
+      var t = bar.querySelector('[data-res-month-template]');
+      bar._tpl = t ? t.cloneNode(true) : null;
+      if (bar._tpl) bar._tpl.removeAttribute('data-res-month-template');
+      if (t) t.remove();
+    }
+    var yms = [];
+    if (monthsOn()) cur.target.matches.forEach(function (d) { var ym = d.key.slice(0, 7); if (yms.indexOf(ym) < 0) yms.push(ym); });
+    show(bar, yms.length > 1);
+    var sig = yms.join(',');
+    if (sig === monthSig) return;
+    monthSig = sig; activeMonth = '';
+    [].slice.call(bar.querySelectorAll('[data-res-month]')).forEach(function (m) { m.remove(); });
+    var pill = bar.querySelector('[data-res-month-pill]');
+    if (pill) { bar.setAttribute('data-res-months-pill', ''); pill._placed = false; } else bar.removeAttribute('data-res-months-pill');
+    yms.forEach(function (ym) {
+      var el = bar._tpl ? bar._tpl.cloneNode(true) : document.createElement('div');
+      el.setAttribute('data-res-month', ym); el.setAttribute('role', 'button');
+      el.textContent = monthLabel(ym);
+      bar.appendChild(el);
+    });
+  }
+  function markMonth(ym, smooth) {
+    var bar = page.querySelector('[data-res-months]');
+    if (!bar || ym === activeMonth) return;
+    activeMonth = ym;
+    var on = null;
+    [].forEach.call(bar.querySelectorAll('[data-res-month]'), function (el) {
+      var a = el.getAttribute('data-res-month') === ym;
+      el.classList.toggle('is-on', a);
+      if (a) on = el;
+    });
+    placePill(bar, on, smooth);
+    if (on && bar.offsetParent) bar.scrollTo({ left: on.offsetLeft - (bar.clientWidth - on.offsetWidth) / 2, behavior: smooth && !reduced() ? 'smooth' : 'auto' });
+  }
+  /* Gleitende Pille: Position und Breite folgen dem aktiven Monat. */
+  function placePill(bar, on, smooth) {
+    var pill = bar && bar.querySelector('[data-res-month-pill]');
+    if (!pill || !on || !bar.offsetParent) return;
+    var dur = parseFloat(bar.getAttribute('data-res-months-dur')) || 560;
+    var ez = bar.getAttribute('data-res-months-ease') || 'cubic-bezier(.34,1.4,.64,1)';
+    var anim = smooth && pill._placed && !reduced();
+    pill.style.transition = anim ? ['transform', 'width', 'height'].map(function (p) { return p + ' ' + dur + 'ms ' + ez; }).join(',') : 'none';
+    pill.style.width = on.offsetWidth + 'px';
+    pill.style.height = on.offsetHeight + 'px';
+    pill.style.transform = 'translate3d(' + on.offsetLeft + 'px,' + on.offsetTop + 'px,0)';
+    pill._placed = true;
+    bar.style.setProperty('--res-pill-text', getComputedStyle(pill).color);   // v2.10: Text auf der Pille = Schriftfarbe der Pille
+  }
+  function jumpMonth(ym) {
+    if (!cur) return;
+    var L = cur.target, idx = -1;
+    for (var i = 0; i < L.matches.length; i++) if (L.matches[i].key.slice(0, 7) === ym) { idx = i; break; }
+    if (idx < 0) return;
+    if (idx < (L.lo || 0)) prepend(Math.max(0, idx - 5));   // Vergangenheit noch nicht geladen
+    if (L.limit > 0 && idx >= L.limit) { L.limit = idx + (L.pageSize || 30); api().kit.reconcile(L); }
+    var g = L.host.querySelector('[data-res-group-date^="' + ym + '"]'); if (!g) return;
+    var hb = headBottom();
+    monthLock = ym; markMonth(ym, true);
+    clearTimeout(monthT); monthT = setTimeout(unlockMonth, 900);
+    page.scrollTo({ top: page.scrollTop + g.getBoundingClientRect().top - hb - 8, behavior: reduced() ? 'auto' : 'smooth' });
+  }
+  function unlockMonth() { monthLock = null; heroKey = ''; paintHero(false); }
+
+  /* ── Agenda: ab heute starten, Vergangenes oben nachladen ──── */
+  function startsToday() {
+    var keys = (page.getAttribute(A + '-start') || 'alle').split(',').map(function (k) { return k.trim(); });
+    return !!cur && keys.indexOf(cur.src.key) > -1;
+  }
+  function todayIndex(L) {
+    var k = api().kit, t = k.dayKey(k.wall(Date.now()));
+    for (var i = 0; i < L.matches.length; i++) if (L.matches[i].key >= t) return i;
+    return Math.max(0, L.matches.length - 1);   // nichts Künftiges: beim letzten Tag
+  }
+  /* v2.10: Unterkante des (sticky) Kopfs — dort, wo er beim Scrollen klebt. */
+  function headBottom() {
+    var HEAD_SEL = '[' + A + '-head],[' + A + '-header],[res-push-header],.res-push-header';
+    var pr = page.getBoundingClientRect(), b = pr.top + page.clientTop;
+    [].forEach.call(page.querySelectorAll(HEAD_SEL), function (h) {
+      var cs = getComputedStyle(h), r = h.getBoundingClientRect();
+      if (cs.display === 'none') return;
+      var v = cs.position === 'sticky' ? pr.top + page.clientTop + (parseFloat(cs.top) || 0) + r.height : r.bottom;
+      if (v > b) b = v;
+    });
+    return b;
+  }
+  /* Fenster nach oben erweitern, Blick bleibt stehen. */
+  function prepend(newLo) {
+    var L = cur.target;
+    if (!(L.lo > 0) || newLo >= L.lo) return;
+    var ref = L.host.querySelector('[data-res-item]'), before = ref ? ref.getBoundingClientRect().top : 0;
+    L.lo = Math.max(0, newLo);
+    api().kit.reconcile(L);
+    if (ref && ref.isConnected) page.scrollTop += ref.getBoundingClientRect().top - before;
+  }
+  function anchorToday() {
+    if (!startsToday() || !api().kit) return;
+    var L = cur.target, i = todayIndex(L), ps = L.pageSize || 30;
+    if (i <= 0) return;
+    L.lo = Math.max(0, i - ps); L.limit = i + ps;
+    api().kit.reconcile(L);
+    var g = L.host.querySelector('[data-res-group-date="' + L.matches[i].key + '"]');
+    if (g) page.scrollTop = page.scrollTop + g.getBoundingClientRect().top - headBottom() - 8;
+  }
+  function maybeLoadEarlier() {
+    if (!cur || upBusy || !(cur.target.lo > 0) || page.scrollTop > 1200) return;
+    upBusy = true;
+    prepend(cur.target.lo - (cur.target.pageSize || 30));
+    upBusy = false;
+  }
+
+  /* ── Bewegung ───────────────────────────────────────────── */
+  function pick(sel) {
+    if (!sel || !sel.trim()) return [];
+    return [].filter.call(document.querySelectorAll(sel), function (e) {
+      return !e.contains(page) && !e.closest('[' + A + ']') && !e.querySelector('[data-sheet]') && !e.closest('[data-sheet]');
+    });
+  }
+  function collect() {
+    R = pick(page.getAttribute(A + '-root') || ROOT_DEF);
+    H = pick(page.hasAttribute(A + '-hide') ? page.getAttribute(A + '-hide') : HIDE_DEF).filter(function (e) { return R.indexOf(e) < 0; });
+  }
+  /* Navbar, Pille, Blur: weg statt mitschieben (backdrop-filter ist teuer). */
+  function hideLayers(on, instant) {
+    H.forEach(function (e) {
+      clearTimeout(e._pushT);
+      if (on) {
+        e.style.transition = 'opacity 160ms ease';
+        e.style.opacity = '0';
+        e._pushT = setTimeout(function () { e.style.visibility = 'hidden'; }, 170);
+      } else if (instant) {
+        e.style.transition = ''; e.style.visibility = ''; e.style.opacity = '';
+      } else {
+        e.style.transition = 'none'; e.style.visibility = ''; e.style.opacity = '0';
+        e.offsetWidth;
+        e.style.transition = 'opacity 220ms ease'; e.style.opacity = '';
+        e._pushT = setTimeout(function () { e.style.transition = ''; }, 240);
+      }
+    });
+  }
+  function baseOf(r) {
+    if (r._pushBase === undefined) { var t = getComputedStyle(r).transform; r._pushBase = (t && t !== 'none') ? ' ' + t : ''; }
+    return r._pushBase;
+  }
+  /* p: 0 = zu, 1 = offen */
+  function set(p, dur) {
+    var t = dur && !reduced() ? 'transform ' + dur + 'ms ' + ease() : 'none';
+    page.style.transition = t;
+    page.style.transform = 'translate3d(' + ((1 - p) * 100) + '%,0,0)';
+    dim.style.transition = t === 'none' ? 'none' : 'opacity ' + dur + 'ms ' + ease();
+    dim.style.opacity = String(p * num('dim', 0.35));
+    if (panel()) return;
+    R.forEach(function (r) {
+      r.style.transition = t;
+      r.style.transform = 'translate3d(' + (-p * num('shift', 24)) + 'vw,0,0)' + baseOf(r);
+    });
+  }
+  /* Beim Wischen höchstens ein Update pro Bild. */
+  function setSoon(p) {
+    pending = p;
+    if (raf) return;
+    raf = requestAnimationFrame(function () { raf = 0; if (pending != null) set(pending, 0); pending = null; });
+  }
+  function flushSoon() { if (raf) { cancelAnimationFrame(raf); raf = 0; } pending = null; }
+  function resetRoots() {
+    R.forEach(function (r) { r.style.transition = ''; r.style.transform = ''; r.style.willChange = ''; r._pushBase = undefined; });
+  }
+
+  /* ── Öffnen / Schließen ─────────────────────────────────── */
+  function open(btn) {
+    if (!init()) return false;
+    var src = srcFor(btn); if (!src || !api() || !api().switchList) return false;
+    var target = lists().filter(function (L) { return L.inSheet && page.contains(L.host); })[0];
+    if (!target) { console.warn('[tavo-push] In [data-res-push] fehlt eine Liste mit data-res-sheet-list'); return false; }
+    clearTimeout(closeTimer);
+    cur = { target: target, src: src, btn: btn };
+    api().switchList(target, src.key, src);
+    paintHead();
+    page.scrollTop = 0;
+    monthSig = ''; activeMonth = ''; monthLock = null; buildMonths();
+    anchorToday();
+    heroKey = ''; heroN = -1; paintHero(true);
+    page.style.visibility = 'visible';
+    page.removeAttribute('inert'); page.removeAttribute('aria-hidden');
+    document.documentElement.setAttribute(A + '-open', '');
+    if (state !== 'open') {
+      applyMode();
+      collect();
+      if (!panel()) R.forEach(function (r) { r.style.willChange = 'transform'; });
+      hideLayers(true);
+      set(0, 0); page.offsetWidth;
+    }
+    set(1, num('dur', 640));
+    state = 'open';
+    if (backPending) { backPending = false; inHistory = true; }   // alter Eintrag noch da
+    if (!inHistory) { history.pushState({ tavoPush: 1 }, ''); inHistory = true; }
+    document.dispatchEvent(new CustomEvent('tavo:push-open', { detail: { key: src.key } }));
+    return true;
+  }
+
+  function close(fromHistory, dur, instant) {
+    if (state !== 'open') return;
+    state = 'closing';
+    flushSoon();
+    backPending = inHistory && !fromHistory;
+    inHistory = false;
+    var d = instant ? 0 : (dur || num('out', 520));
+    set(0, d);
+    if (instant) { finish(true); return; }
+    closeTimer = setTimeout(function () { finish(false); }, (reduced() ? 0 : d) + 30);
+  }
+  function finish(instant) {
+      if (state !== 'closing') return;
+      state = 'closed';
+      page.style.visibility = 'hidden';
+      page.setAttribute('inert', ''); page.setAttribute('aria-hidden', 'true');
+      document.documentElement.removeAttribute(A + '-open');
+      resetRoots();
+      hideLayers(false, instant);
+      if (backPending) { backPending = false; history.back(); }   // erst jetzt: kein Hänger mitten in der Bewegung
+      if (cur) api().switchList(cur.target, '');
+      cur = null;
+      document.dispatchEvent(new CustomEvent('tavo:push-close'));
+  }
+
+  /* ── Wischen nach rechts = zurück ───────────────────────── */
+  function bindSwipe() {
+    var s = null;
+    page.addEventListener('touchstart', function (e) {
+      if (state !== 'open' || !swipeOn() || e.touches.length !== 1 || (e.target.closest && e.target.closest('[data-res-months]'))) { s = null; return; }
+      var t = e.touches[0];
+      s = { x: t.clientX, y: t.clientY, phase: 'pending', dx: 0, pts: [{ t: performance.now(), x: t.clientX }] };
+    }, { passive: true });
+    page.addEventListener('touchmove', function (e) {
+      if (!s || s.phase === 'dead') return;
+      var t = e.touches[0], dx = t.clientX - s.x, dy = t.clientY - s.y;
+      if (s.phase === 'pending') {
+        if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+        if (Math.abs(dy) > Math.abs(dx) || dx < 0) { s.phase = 'dead'; return; }
+        s.phase = 'drag';
+      }
+      var now = performance.now();
+      s.pts.push({ t: now, x: t.clientX });
+      while (s.pts.length > 2 && now - s.pts[0].t > 100) s.pts.shift();
+      s.dx = Math.max(0, dx);
+      setSoon(1 - s.dx / (page.offsetWidth || innerWidth));
+      if (e.cancelable) e.preventDefault();
+    }, { passive: false });
+    function end(e) {
+      if (!s || s.phase !== 'drag') { s = null; return; }
+      var w = page.offsetWidth || innerWidth, a = s.pts[0], z = s.pts[s.pts.length - 1];
+      var v = z.t > a.t ? (z.x - a.x) / (z.t - a.t) : 0;   // px/ms, letzte 100 ms
+      var done = e.type !== 'touchcancel' && (s.dx > w * 0.3 || (v > 0.3 && s.dx > 24));
+      var rest = done ? Math.max(240, num('out', 520) * (1 - s.dx / w)) : 380;
+      flushSoon();
+      if (done) close(false, rest); else set(1, rest);
+      s = null;
+    }
+    page.addEventListener('touchend', end, { passive: true });
+    page.addEventListener('touchcancel', end, { passive: true });
+  }
+
+  /* ── Ereignisse ───────────────────────────────────────── */
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    var btn = t.closest && t.closest('[data-res-more]');
+    if (btn && open(btn)) { e.preventDefault(); return; }
+    var mo = t.closest && t.closest('[data-res-month]');
+    if (mo && page && page.contains(mo)) { e.preventDefault(); jumpMonth(mo.getAttribute('data-res-month')); return; }
+    if (t.closest && (t.closest('[' + A + '-back]') || t.closest('[' + A + '-overlay]'))) { e.preventDefault(); close(); }
+  });
+  window.addEventListener('popstate', function () {
+    if (state !== 'open') return;
+    var top = sheetOnTop();
+    if (top) { Sheet.close(top); history.pushState({ tavoPush: 1 }, ''); inHistory = true; return; }
+    close(true, 0, NATIVE_SWIPE);   // Safari hat schon selbst animiert
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && state === 'open' && !sheetOnTop()) close();
+  });
+  addEventListener('resize', function () {
+    if (state !== 'open') return;
+    resetRoots(); applyMode(); collect();
+    var bar = page.querySelector('[data-res-months]');
+    if (bar) placePill(bar, bar.querySelector('[data-res-month].is-on'), false);
+    if (!panel()) R.forEach(function (r) { r.style.willChange = 'transform'; });
+    set(1, 0);
+  }, { passive: true });
+
+  document.addEventListener('tavo:rendered', function () { paintButtons(); paintHead(); if (state === 'open') { buildMonths(); paintHero(false); } });
+  document.addEventListener('tavo:ready', function () { init(); paintButtons(); });
+  if (history.state && history.state.tavoPush) history.replaceState(null, '');
+  if (api()) { init(); paintButtons(); }
+  if (page) applyMode();
+  window.tavoPush = { open: open, close: function () { close(); }, get state() { return state; } };
+})();
+</script>
+<style>
+/* tavo — Scrim-Fix: nur Opacity animieren (nicht z-index), im Takt der Sheets */
+.data-sheet-scrim{transition:opacity 400ms cubic-bezier(.32,.72,0,1);}
+.data-sheet-scrim:not(.is-open){transition:opacity 340ms cubic-bezier(.4,0,.86,.6);}
+</style>
+<script>
+/* tavo — Scrim-Fix: Schließt ein oberes Sheet, rutscht der Scrim sofort
+   unter das nächste offene Sheet — das untere wird direkt wieder hell. */
+document.addEventListener('sheet:close', function (e) {
+  if (!window.Sheet || !Sheet.stack) return;
+  var closing = e.detail && e.detail.sheet;
+  var rest = Sheet.stack().filter(function (s) { return s !== closing && s.hasAttribute('data-sheet-shown'); });
+  if (!rest.length) return;
+  var z = parseInt(rest[rest.length - 1].style.zIndex, 10);
+  var scrim = document.querySelector('[data-sheet-scrim]');
+  if (scrim && z) scrim.style.zIndex = String(z - 1);
+});
+</script>

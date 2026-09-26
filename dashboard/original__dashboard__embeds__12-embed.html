@@ -1,0 +1,90 @@
+<style>
+/* Ohne Status unsichtbar — Platzhalter aus dem Template können nie durchrutschen (nicht im Designer) */
+html:not(.wf-design-mode) [data-res-badge]:not(.is-offen):not(.is-aenderung):not(.is-storniert),
+html:not(.wf-design-mode) [data-res-eta-wrap]:not(.is-bald):not(.is-jetzt){display:none!important}
+</style>
+<script>
+/* tavo — Status an der Reservierungszeile v1.2
+   BADGE (Revolut-Stil) im Initialen-Kreis: [data-res-badge] mit Icons
+     [data-res-badge-icon="offen|aenderung|storniert"]
+     Klasse am Badge: is-offen (Anfrage offen) · is-aenderung (Änderung angefragt)
+     · is-storniert (storniert/abgelehnt/No-Show) · bestätigt = kein Badge
+   ANKUNFT (nur bestätigte): [data-res-eta-wrap] > [data-res-eta]
+     „in 45 Min" (Klasse is-bald) · „jetzt" (is-jetzt), sonst ausgeblendet
+     data-res-eta-window="60"  ab wie vielen Minuten vorher · data-res-eta-grace="15"
+   v1.1: ohne Dimmen; Badge/Chip sind ohne Status per CSS aus; neue Zeilen
+   (Nachladen, Suche) werden sofort erfasst.
+   v1.2: Der nächste Gast heute bekommt immer einen Chip („in 1:45 Std") und
+   die Klasse is-naechste an der Zeile.
+   Liest data-res-db-status / -date / -time, die Reservierungen v4 schreibt. */
+(function () {
+  'use strict';
+  var BADGE = { pending: 'offen', change_requested: 'aenderung', declined: 'storniert', cancelled: 'storniert', no_show: 'storniert' };
+  var KINDS = ['offen', 'aenderung', 'storniert'];
+  var raf = 0;
+  function show(el, on) { var v = on ? '' : 'none'; if (el.style.display !== v) el.style.display = v; }
+  function txt(el, v) { if (el.textContent !== v) el.textContent = v; }
+  function num(el, a, d) { var v = parseFloat(el && el.getAttribute(a)); return isNaN(v) ? d : v; }
+  function paint() {
+    raf = 0;
+    var api = window.tavoReservierungen;
+    if (!api || !api.kit) return;
+    var w = api.kit.wall(Date.now()), now = w.getTime(), today = api.kit.dayKey(w), next = Infinity;
+    var rows = [].map.call(document.querySelectorAll('[data-res-item]'), function (n) {
+      if (n._st === undefined) {
+        n._st = {
+          badge: n.querySelector('[data-res-badge]'),
+          icons: [].slice.call(n.querySelectorAll('[data-res-badge-icon]')),
+          wrap: n.querySelector('[data-res-eta-wrap]'),
+          eta: n.querySelector('[data-res-eta]')
+        };
+      }
+      var s = n._st, cfg = s.wrap || s.eta;
+      var r = { n: n, s: s, st: n.getAttribute('data-res-db-status') || '', diff: null,
+        win: num(cfg, 'data-res-eta-window', 60), grace: num(cfg, 'data-res-eta-grace', 15) };
+      var d = n.getAttribute('data-res-date'), t = n.getAttribute('data-res-time');
+      if (d && t) {
+        var p = d.split('-'), q = t.split(':');
+        r.diff = (new Date(+p[0], p[1] - 1, +p[2], +q[0], +q[1]).getTime() - now) / 60000;
+      }
+      r.ok = r.st === 'confirmed' && r.diff !== null;
+      if (r.ok && d === today && r.diff >= -r.grace && r.diff < next) next = r.diff;
+      return r;
+    });
+    rows.forEach(function (r) {
+      var s = r.s, n = r.n, kind = BADGE[r.st] || '';
+      if (s.badge) {
+        KINDS.forEach(function (k) { s.badge.classList.toggle('is-' + k, k === kind); });
+        show(s.badge, !!kind);
+        s.icons.forEach(function (i) { show(i, i.getAttribute('data-res-badge-icon') === kind); });
+      }
+      var isNext = r.ok && r.diff === next;
+      n.classList.toggle('is-naechste', isNext);
+      var on = r.ok && r.diff >= -r.grace && (r.diff <= r.win || isNext), jetzt = on && r.diff <= 0;
+      if (s.eta) {
+        var m = Math.max(1, Math.ceil(r.diff));
+        txt(s.eta, !on ? '' : jetzt ? 'jetzt' : m <= r.win ? 'in ' + m + ' Min'
+          : 'in ' + Math.floor(m / 60) + ':' + ('0' + m % 60).slice(-2) + ' Std');
+        [s.wrap, s.eta].forEach(function (el) {
+          if (!el) return;
+          el.classList.toggle('is-jetzt', jetzt);
+          el.classList.toggle('is-bald', on && !jetzt);
+        });
+      }
+      if (s.wrap || s.eta) show(s.wrap || s.eta, on);
+    });
+  }
+  function soon() { if (!raf) raf = requestAnimationFrame(paint); }
+  document.addEventListener('tavo:rendered', paint);
+  /* Neue Zeilen außerhalb eines Renderlaufs (Nachladen beim Scrollen, Suche). */
+  new MutationObserver(function (list) {
+    for (var i = 0; i < list.length; i++) for (var j = 0; j < list[i].addedNodes.length; j++) {
+      var a = list[i].addedNodes[j];
+      if (a.nodeType === 1 && (a.hasAttribute('data-res-item') || a.querySelector('[data-res-item]'))) { paint(); return; }
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true });
+  ['tavo:push-open', 'tavo:page-ready'].forEach(function (e) { document.addEventListener(e, soon); });
+  setInterval(function () { if (!document.hidden) soon(); }, 30000);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) soon(); });
+})();
+</script>

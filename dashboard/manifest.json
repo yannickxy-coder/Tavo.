@@ -1,0 +1,1234 @@
+{
+  "exported_at": "2026-09-26T18:05:53.628Z",
+  "source_url": "https://tablefy.app/",
+  "site_id": "6a8d9731e8afbcf98fb26241",
+  "page_id": "6a8d9731e8afbcf98fb26237",
+  "expected_embeds": 41,
+  "exported_embeds": 41,
+  "missing_embeds": [],
+  "blocks": [
+    {
+      "scope": "site",
+      "location": "head",
+      "file": "original__site__head.html",
+      "bytes": 3085,
+      "sha256": "df6a99c4ddb2b670bc8259f8200970d9dc2d19aed3c3f9c84afbb3d9da9f87fe",
+      "extracted": [
+        {
+          "file": "style__site__head.01.css",
+          "sha256": "6a45e6d6ca66d1491d2bca9f4b5c8c3b0c115ef1c442d13afce727f8a889e7a0",
+          "attributes": ""
+        },
+        {
+          "file": "style__site__head.02.css",
+          "sha256": "e3ea3dfe7243062fe241506244a2973eb18c98580b2449174eb81d4e229c09f6",
+          "attributes": ""
+        },
+        {
+          "file": "script__site__head.03.js",
+          "sha256": "34e52a6dffb1a6a62bcb646c9204522f54166472ea3f28327fe6a0593060e5e8",
+          "attributes": ""
+        },
+        {
+          "file": "script__site__head.04.js",
+          "sha256": "1e77508e6eca2582df23fd78e8dcd8547c5c6132bec4166300bc209aa52357de",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "site",
+      "location": "footer",
+      "file": "original__site__footer.html",
+      "bytes": 2067,
+      "sha256": "40d92fcc00f98346543f7fb13f339342e4abd38c3998ecfde702cc67cb3c2b5b",
+      "extracted": [
+        {
+          "file": "script__site__footer.02.js",
+          "sha256": "c7b6f2d8f50fecedd05abdea11167f3eaef9a065a2241f5798da8513a4b6ceb6",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "dashboard",
+      "location": "head",
+      "file": "original__dashboard__head.html",
+      "bytes": 10023,
+      "sha256": "f4f009a06bb735b686d7ccd18c05e62763e35390c86d3c3cf23649a00adb0035",
+      "extracted": [
+        {
+          "file": "script__dashboard__head.01.js",
+          "sha256": "dec5802940390ccf93cea431726180e16d0ac2d6d2bfacec823cd8fb02ab1dc4",
+          "attributes": ""
+        },
+        {
+          "file": "style__dashboard__head.02.css",
+          "sha256": "69357b283baf7f27cf4fb8b531294dbde77cd45edc4ce7795dba057c29ffef0a",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__head.03.js",
+          "sha256": "14e84463df81c72aefd7ffd8eb25c0a53d270f0d967dc17fef03aa9847c9c930",
+          "attributes": ""
+        },
+        {
+          "file": "style__dashboard__head.07.css",
+          "sha256": "e82f33007a5cbd8512bbf18549cbdefbca8d9ab419c67ca80df79fafec8551f0",
+          "attributes": ""
+        },
+        {
+          "file": "style__dashboard__head.08.css",
+          "sha256": "e10da0c78dd302e3a9737d999330a96ee04139e18ba6a9d4e2d73e25c4233608",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__head.09.js",
+          "sha256": "e05cb992a6f045470852845a4a86e43377a9f1c1033af11649be054a08564425",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "dashboard",
+      "location": "footer",
+      "file": "original__dashboard__footer.html",
+      "bytes": 22380,
+      "sha256": "cf4e67b8aa90f9b92d52182d68cde219e649518ec07c1c36eedadec4871736c7",
+      "extracted": [
+        {
+          "file": "script__dashboard__footer.03.js",
+          "sha256": "14e84463df81c72aefd7ffd8eb25c0a53d270f0d967dc17fef03aa9847c9c930",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__footer.04.js",
+          "sha256": "120ada77ec286fd8294f294c9e61470eff6ae0ed9bdb09d9db2a840b82262d64",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__footer.05.js",
+          "sha256": "494cb2e23ff2e3146c1daa05f902681bc2e696390a2a0d7cb36bd23638621648",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__footer.06.js",
+          "sha256": "60e5a5ecbd3e77621e913a181e7896200367c0033e562112c4efadd4df7a1538",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__footer.07.js",
+          "sha256": "eaaf57abfd482c87c2bbdfa4dbe0fc00f635842b86f2972d036cb0b0b1598047",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 1,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "cfe33426-75e6-d346-2f32-2010ff312194"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "text-html"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__01-text-html.html",
+      "bytes": 128,
+      "sha256": "d62b3b2725a5c6b3d8e73d361255f2cb4d402f5fe739c7de3bcda7a427bcdca8",
+      "extracted": []
+    },
+    {
+      "scope": "embed",
+      "query_order": 2,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "7e55fc33-c3f5-0a0c-9467-282c5dd99b34"
+        },
+        "type": "HtmlEmbed",
+        "attributes": {
+          "data-tavo-perf-guard": ""
+        },
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__02-data-tavo-perf-guard.html",
+      "bytes": 9579,
+      "sha256": "7c2e070bd6b7015f25c0ff7b8a2c13234b5ce713726b6390139b0f84adb6b6f9",
+      "extracted": [
+        {
+          "file": "script__dashboard__embeds__02-data-tavo-perf-guard.01.js",
+          "sha256": "258cc4e591969f70f54cdfa6c7eeb13eb735459e8682660b820aac31dd735993",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 3,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "c3944d8d-fb22-b253-501d-c07a0ec208f0"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "dashboard-slider-code-js"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__03-dashboard-slider-code-js.html",
+      "bytes": 48924,
+      "sha256": "e45b2572220f11c8ae353de782036760d4263b85ab949eea914df6085b7e94f8",
+      "extracted": [
+        {
+          "file": "style__dashboard__embeds__03-dashboard-slider-code-js.01.css",
+          "sha256": "994f0d47bd88a38419877a09cd9564ea7f4306a4dd8594de1afbd0ee5d2fe7b9",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__embeds__03-dashboard-slider-code-js.02.js",
+          "sha256": "95fddb466123fa6fa269bc4eb7e3b1644861c5022e88748c56a9b3375ad92dc1",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 4,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "5e9c0a63-0bc7-0b84-ea60-ba30f2f12b84"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "inbox-js"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__04-inbox-js.html",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "extracted": []
+    },
+    {
+      "scope": "embed",
+      "query_order": 5,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "8a7eba64-b995-de6e-bff4-b12b4435a7c6"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "nav-wrapper-js"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__05-nav-wrapper-js.html",
+      "bytes": 1220,
+      "sha256": "7de3d8a3b001b768d3677940207a9977221d39e765cd76fa514ef8d2a6362566",
+      "extracted": [
+        {
+          "file": "script__dashboard__embeds__05-nav-wrapper-js.01.js",
+          "sha256": "1cb3f196c49617b7aeb7a38711c9ca0d92b1805a8421de5bd98ad4f1d561ba86",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 6,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "c8759e25-4138-6cbf-ad09-4db645d92d0c"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "Browser Font Smoothing"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__06-browser-font-smoothing.html",
+      "bytes": 104,
+      "sha256": "ef6fd6b8c9bf114a420ec9ee7b3672fb75d47f39427608df19e3dac56f54b8fb",
+      "extracted": [
+        {
+          "file": "style__dashboard__embeds__06-browser-font-smoothing.01.css",
+          "sha256": "13b7a9d978e87a4df8c37c887351e9a7c461d6adb3b9e8e481ad0c2fed9c885f",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 7,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "20265532-7aea-8b3f-790d-31ee51b47ed7"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "search-js"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__07-search-js.html",
+      "bytes": 29524,
+      "sha256": "636369b2d8e31d2ac802d3f06d4b17c82b834bfbe44c59458ae9cabf37fe07d8",
+      "extracted": [
+        {
+          "file": "script__dashboard__embeds__07-search-js.01.js",
+          "sha256": "161371718bb663309142c2cadcc7f8384a31f2bba604dcf39f75d692e13433e1",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__embeds__07-search-js.02.js",
+          "sha256": "510725f0cf85d129858013da5765f616258277893c77706f0335f5bda9f11cce",
+          "attributes": ""
+        },
+        {
+          "file": "style__dashboard__embeds__07-search-js.03.css",
+          "sha256": "a2a16176a7b1bc946363f18d245265c63cd203ea01ac9a142a4107d7d786ef58",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 8,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "50c4524f-1937-e800-68bf-0585bbbc790c"
+        },
+        "type": "HtmlEmbed",
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__08-embed.html",
+      "bytes": 178,
+      "sha256": "37bbc23d94d65709f5d4f1dc433de27ab21e1aaa962e557d69defe186a18cf13",
+      "extracted": [
+        {
+          "file": "style__dashboard__embeds__08-embed.01.css",
+          "sha256": "81d995060ccacf4c8bbb41ac63cd56d1f4219a9553f1ad6630bec688e34de033",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 9,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "58428645-63d3-b37f-edaa-c6f8b6524361"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "resevierungen-js"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__09-resevierungen-js.html",
+      "bytes": 50785,
+      "sha256": "1a0cf290f14f7733740d8daf39cfe686e368ca7dea9b1065f8f06465e0a887ff",
+      "extracted": [
+        {
+          "file": "script__dashboard__embeds__09-resevierungen-js.01.js",
+          "sha256": "a9dda33c470e175a6eecb79c8790c3ca08bb1988e6da6d275c11cd7f0d96e635",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 10,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "a3b6676e-13f9-37d9-9e41-d465d4db04aa"
+        },
+        "type": "HtmlEmbed",
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__10-embed.html",
+      "bytes": 1837,
+      "sha256": "dd68a222651b6edf61a2855bf46cfff06bc0b72043bbff93de9a7efb17a4dbbd",
+      "extracted": [
+        {
+          "file": "script__dashboard__embeds__10-embed.01.js",
+          "sha256": "2d8afdf02d543d13994e5a7b26862d2ccefd2961f2643468aa14d0c27b7ceb4a",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 11,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "5d8f0e26-de6c-7d5a-0a99-128448c95764"
+        },
+        "type": "HtmlEmbed",
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__11-embed.html",
+      "bytes": 1272,
+      "sha256": "da4a7e853100d5444e86aef804d375d17f0269a7b1bc6c5cb8a72e9c741679ca",
+      "extracted": [
+        {
+          "file": "script__dashboard__embeds__11-embed.01.js",
+          "sha256": "223329c4c959ef349a9076974dc1d8ec8d84a67a872bf3511a9a74bbce3bba2f",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 12,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "c33194c7-48dd-732a-b5b2-5a97affe5e5b"
+        },
+        "type": "HtmlEmbed",
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__12-embed.html",
+      "bytes": 4872,
+      "sha256": "b302bd5bf4af3f9eb78d56cf25b6bc0d3ffc20b1830b79c92a0a02df15d062f8",
+      "extracted": [
+        {
+          "file": "style__dashboard__embeds__12-embed.01.css",
+          "sha256": "e3d0c2df57869596e3d237e94759516632a32e100286b2ae6915ba208fbd46e4",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__embeds__12-embed.02.js",
+          "sha256": "11faa93a78ce202fc79eccc8d66d9c7a48fc373c459cb1495f040f25330c99df",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 13,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "b50512cf-4200-7d09-50a7-aafc5df993c9"
+        },
+        "type": "HtmlEmbed",
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__13-embed.html",
+      "bytes": 2859,
+      "sha256": "6233f9fbad3fe8bc9e51486e8b5fac23954672746fb4cd4c46765227b7134141",
+      "extracted": [
+        {
+          "file": "style__dashboard__embeds__13-embed.01.css",
+          "sha256": "b947a7c952764a855e181cfe2aa23c281444c321b1d736f99c92bdbb9bf7ddd2",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__embeds__13-embed.02.js",
+          "sha256": "a40d3d40ee66986803542c7afbbc23d76ddedbbd490bcb60dc52a707692f438c",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 14,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "ae3dadf7-cfe8-223a-1efc-c423b4d71909"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "tavo — Detail-Sheet-js"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__14-tavo-detail-sheet-js.html",
+      "bytes": 22261,
+      "sha256": "92a0ad34b0f38b40b7b12b20561905ee0ad2d75c5e7fd56112ab919936b77115",
+      "extracted": [
+        {
+          "file": "script__dashboard__embeds__14-tavo-detail-sheet-js.01.js",
+          "sha256": "d7b01284134a2b30d62a695722777e83ed8fb29c7ac625a7d006aa8ef16612f6",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 15,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "c3306129-9718-9fdc-fba1-4d4ed9948b27"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "scrollbar-hide-css"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__15-scrollbar-hide-css.html",
+      "bytes": 371,
+      "sha256": "74e55bf1c4e67bf88f188aaa68d355089c3d16dae4a719a24c31d394d96f62b9",
+      "extracted": [
+        {
+          "file": "style__dashboard__embeds__15-scrollbar-hide-css.01.css",
+          "sha256": "37964ea6de812b0fa40bbb699a6918534e56d6a23d7535702a1c7bba7383bfc6",
+          "attributes": ""
+        },
+        {
+          "file": "style__dashboard__embeds__15-scrollbar-hide-css.02.css",
+          "sha256": "a868312d7a862ae5958eedbf098cca7c0366e9790d7b286657c798ed43299d86",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 16,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "f57a2aea-8fe8-537e-3e9b-24601aa286a7"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "textarea-resize-css"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__16-textarea-resize-css.html",
+      "bytes": 111,
+      "sha256": "1af4d0779b6210038afdb5f3457f26bcb6e2b83747083f4f55810271e715b628",
+      "extracted": [
+        {
+          "file": "style__dashboard__embeds__16-textarea-resize-css.01.css",
+          "sha256": "9bf5c184b5bb10d99b210b814bf742175e882cdb5bd0f57afec0809aadf7068f",
+          "attributes": ""
+        },
+        {
+          "file": "style__dashboard__embeds__16-textarea-resize-css.02.css",
+          "sha256": "f12f007a28230cbdcd55159afc35a5ee996b797f55898652da255c277680b9d4",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 17,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "95cd3d28-24cf-b04e-d924-cd12a4046bff"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "snippets-js"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__17-snippets-js.html",
+      "bytes": 17914,
+      "sha256": "7bbf009199b75fa7118d0f55ca7d030278b88c073cfd11b7f8322c6877747705",
+      "extracted": [
+        {
+          "file": "style__dashboard__embeds__17-snippets-js.01.css",
+          "sha256": "1e3d782c87767b7a73fd08a93abc6184604e20a859970967e587f933913de7c0",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__embeds__17-snippets-js.02.js",
+          "sha256": "330b09d155654c351f41cff2354c6afd1acf7b62e3026891488ba96c7a910242",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 18,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "d51c22cb-141a-e924-03e4-0d2148da3c4d"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "tavo - einstellung - js"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__18-tavo-einstellung-js.html",
+      "bytes": 14086,
+      "sha256": "208f6fcce6e0312c50212e88047686d7fe4b520c9c184743888e4abbe3724928",
+      "extracted": [
+        {
+          "file": "script__dashboard__embeds__18-tavo-einstellung-js.01.js",
+          "sha256": "8a6e102ba6770bff369d60b492b98aa779a58df0a49ee72705390afe1f0000ef",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__embeds__18-tavo-einstellung-js.02.js",
+          "sha256": "35deecb85d0819364adefec141ce8bab4dbdda4d43867b7c2f96dee34f3ff7c6",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 19,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "8eadc0c0-51aa-8bfd-2db5-b8f59182b001"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "tavo — Nachrichten-js"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__19-tavo-nachrichten-js.html",
+      "bytes": 7849,
+      "sha256": "4f5d6075a5c09d8b490467fa6b6c1145279335d3ff54b9f8df39d88d7d862ea7",
+      "extracted": [
+        {
+          "file": "script__dashboard__embeds__19-tavo-nachrichten-js.01.js",
+          "sha256": "8f03f98565ea2fd6c98e339492df5f6658837469533ecff7d8f01f816a256130",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__embeds__19-tavo-nachrichten-js.02.js",
+          "sha256": "0dc4b8ef2e79aea2b44365c8f9a45a9d5f5a4bd9f2f9590333d4bdbde7f3011e",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 20,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "0224c122-c814-d2b8-206c-8f7f626eb17c"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "flip.js"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__20-flip-js.html",
+      "bytes": 7922,
+      "sha256": "73e900d2c5f1574ff33304e7372c055ac52967748db71267af4d6d2f98d1d62b",
+      "extracted": [
+        {
+          "file": "script__dashboard__embeds__20-flip-js.03.js",
+          "sha256": "bce1fd361485874395cf4b0c696151a587ec064e141605007049f89a29b9e6fe",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 21,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "792d0be7-7f4a-f432-5576-ed86fb2f9f6a"
+        },
+        "type": "HtmlEmbed",
+        "attributes": {
+          "data-tavo-accept-patch": ""
+        },
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__21-data-tavo-accept-patch.html",
+      "bytes": 139,
+      "sha256": "1ceea84681615f23ece04e661b4d59131db3ba09aa562e76b57c7315c00eebb0",
+      "extracted": []
+    },
+    {
+      "scope": "embed",
+      "query_order": 22,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "141a7388-2634-a7f1-c8d3-70e32db70235"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "create-res-css"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__22-create-res-css.html",
+      "bytes": 2532,
+      "sha256": "bff809920926d2da056ad82001e034cc32ba9b4fb4d39e82d5da35e3ac4b9008",
+      "extracted": [
+        {
+          "file": "style__dashboard__embeds__22-create-res-css.01.css",
+          "sha256": "bdccd17e9d1d1267957ed566a6219a7475a762e4427b0887d3242d7fa3d40d4e",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__embeds__22-create-res-css.02.js",
+          "sha256": "14e84463df81c72aefd7ffd8eb25c0a53d270f0d967dc17fef03aa9847c9c930",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 23,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "c139e2e1-1ac7-5bcd-23ba-ae898441a4a5"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "create-res-js"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__23-create-res-js.html",
+      "bytes": 45043,
+      "sha256": "1aa0667af597d5805325aa8d870092752ab92c5dce4aab2bab7867ff7b8b75b6",
+      "extracted": [
+        {
+          "file": "script__dashboard__embeds__23-create-res-js.01.js",
+          "sha256": "289c9250262210812e9db63dda781497ce9841a521d8b56e31abcb66fa1b6d3a",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 24,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "2d7405d7-bde0-0468-384e-ce0a8d1e74f4"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "tischordnung-js"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__24-tischordnung-js.html",
+      "bytes": 21431,
+      "sha256": "244996f8a83b22b94eec71d3c985146c41103d8f3bcf5f08f16e753653cdbad2",
+      "extracted": [
+        {
+          "file": "style__dashboard__embeds__24-tischordnung-js.01.css",
+          "sha256": "2a5e15c3d24b015299117a16216dda92180f7978506ec009387f144e5a841a4a",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__embeds__24-tischordnung-js.02.js",
+          "sha256": "9e96dea13a03f71ea891e309b9a02f9411e64bed40dfecf7a04d05b33736da40",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 25,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "a0d26b70-80f0-ff25-e9de-89e819f81c37"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "background-js"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__25-background-js.html",
+      "bytes": 13902,
+      "sha256": "1861b4b544c316a4729fdbcd0c12b5aed80b68f45d48792c4d14e2df742dac4a",
+      "extracted": [
+        {
+          "file": "style__dashboard__embeds__25-background-js.02.css",
+          "sha256": "0f7fb7356e0997dba7b23594d1a6aafeb276d64f42c113fca000f0710b6d01c8",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__embeds__25-background-js.03.js",
+          "sha256": "8124fcd46a1658fb8562e0d2be34741a69c63db663d555596b3f08e252111a79",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 26,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "c4b9851c-2fe7-5c9b-7106-a59bb6f223eb"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "text-html",
+          "center"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__26-text-html-center.html",
+      "bytes": 100,
+      "sha256": "b1ca4e0f1a2ed5692abca7b82e4b1136d0d5370a47bc65e85b13911bc2ac6c97",
+      "extracted": []
+    },
+    {
+      "scope": "embed",
+      "query_order": 27,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "c4b9851c-2fe7-5c9b-7106-a59bb6f223f1"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "text-html",
+          "center"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__27-text-html-center.html",
+      "bytes": 87,
+      "sha256": "8ee2d478dd8f2f416dc71e31a6938d9b5bb19da59058edaa1a3ca815bacaf6e0",
+      "extracted": []
+    },
+    {
+      "scope": "embed",
+      "query_order": 28,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "c4b9851c-2fe7-5c9b-7106-a59bb6f223f7"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "text-html",
+          "center"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__28-text-html-center.html",
+      "bytes": 96,
+      "sha256": "9224f20b235caf8fd5af396fba50ed6d832a5dfaf447a0c59d5a62d5d63817e9",
+      "extracted": []
+    },
+    {
+      "scope": "embed",
+      "query_order": 29,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "c4b9851c-2fe7-5c9b-7106-a59bb6f223fd"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "text-html",
+          "center"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__29-text-html-center.html",
+      "bytes": 90,
+      "sha256": "21eef08dd43b72ecbb2204383109cadd941598265adc7395395956bb18c8a621",
+      "extracted": []
+    },
+    {
+      "scope": "embed",
+      "query_order": 30,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "c4b9851c-2fe7-5c9b-7106-a59bb6f22403"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "text-html",
+          "center"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__30-text-html-center.html",
+      "bytes": 88,
+      "sha256": "7de4b106a0ec071d847a2b1aa6d1afd38fb76b2f509f0c7bf980289a4acdf106",
+      "extracted": []
+    },
+    {
+      "scope": "embed",
+      "query_order": 31,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "61980b74-3395-02cf-cc9d-2c6e02c7d3db"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "text-html",
+          "center"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__31-text-html-center.html",
+      "bytes": 95,
+      "sha256": "e29a09597ed29223bb08fa5ba9ad82d0f48c0066ee8ca29b6902ba4c0c192fcf",
+      "extracted": []
+    },
+    {
+      "scope": "embed",
+      "query_order": 32,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "61980b74-3395-02cf-cc9d-2c6e02c7d3e7"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "text-html",
+          "center"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__32-text-html-center.html",
+      "bytes": 120,
+      "sha256": "e0e8b028ef45b75f034ed214e18789acf160a039931fd928a761a2b14a2cc41b",
+      "extracted": []
+    },
+    {
+      "scope": "embed",
+      "query_order": 33,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "61980b74-3395-02cf-cc9d-2c6e02c7d40f"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "text-html",
+          "center"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__33-text-html-center.html",
+      "bytes": 95,
+      "sha256": "e29a09597ed29223bb08fa5ba9ad82d0f48c0066ee8ca29b6902ba4c0c192fcf",
+      "extracted": []
+    },
+    {
+      "scope": "embed",
+      "query_order": 34,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "61980b74-3395-02cf-cc9d-2c6e02c7d41b"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "text-html",
+          "center"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__34-text-html-center.html",
+      "bytes": 120,
+      "sha256": "e0e8b028ef45b75f034ed214e18789acf160a039931fd928a761a2b14a2cc41b",
+      "extracted": []
+    },
+    {
+      "scope": "embed",
+      "query_order": 35,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "61980b74-3395-02cf-cc9d-2c6e02c7d440"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "text-html",
+          "center"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__35-text-html-center.html",
+      "bytes": 95,
+      "sha256": "e29a09597ed29223bb08fa5ba9ad82d0f48c0066ee8ca29b6902ba4c0c192fcf",
+      "extracted": []
+    },
+    {
+      "scope": "embed",
+      "query_order": 36,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "61980b74-3395-02cf-cc9d-2c6e02c7d44c"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "text-html",
+          "center"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__36-text-html-center.html",
+      "bytes": 120,
+      "sha256": "e0e8b028ef45b75f034ed214e18789acf160a039931fd928a761a2b14a2cc41b",
+      "extracted": []
+    },
+    {
+      "scope": "embed",
+      "query_order": 37,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "7007d9a6-c74b-72b3-d333-e127639b1491"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "text-html",
+          "center"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__37-text-html-center.html",
+      "bytes": 92,
+      "sha256": "5db8dd308c215a1c34e622f4100e501c67f26133d94e0c53743d6f11e8245612",
+      "extracted": []
+    },
+    {
+      "scope": "embed",
+      "query_order": 38,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "7007d9a6-c74b-72b3-d333-e127639b149d"
+        },
+        "type": "HtmlEmbed",
+        "styleNames": [
+          "text-html",
+          "center"
+        ],
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__38-text-html-center.html",
+      "bytes": 120,
+      "sha256": "e0e8b028ef45b75f034ed214e18789acf160a039931fd928a761a2b14a2cc41b",
+      "extracted": []
+    },
+    {
+      "scope": "embed",
+      "query_order": 39,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "f2610454-5ded-2969-278c-595eed94deb4"
+        },
+        "type": "HtmlEmbed",
+        "attributes": {
+          "data-tablefy-dashboard-timezone": ""
+        },
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__39-data-tablefy-dashboard-timezone.html",
+      "bytes": 134,
+      "sha256": "c9cc87a12221f455d7b846b519232f07fb1ff7cc4c468f5eb4a38a1907a630be",
+      "extracted": []
+    },
+    {
+      "scope": "embed",
+      "query_order": 40,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "49787715-0fdb-006a-efb0-994d96984024"
+        },
+        "type": "HtmlEmbed",
+        "attributes": {
+          "data-tavo-status-chip-runtime": ""
+        },
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__40-data-tavo-status-chip-runtime.html",
+      "bytes": 23676,
+      "sha256": "8a356e3726f48956b3d75be19fbc74312391d38bfd5aa0066c5eadd61c4f19bd",
+      "extracted": [
+        {
+          "file": "style__dashboard__embeds__40-data-tavo-status-chip-runtime.01.css",
+          "sha256": "97c55c2e9d598fc70c14f762142347eaef0ee9955885c424a473ee6df893d8c2",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__embeds__40-data-tavo-status-chip-runtime.02.js",
+          "sha256": "603e4dd9bda791470d78e237e8e5de85bf5ce74bbdae2d0e679d86d8b293bcfa",
+          "attributes": ""
+        }
+      ]
+    },
+    {
+      "scope": "embed",
+      "query_order": 41,
+      "element": {
+        "id": {
+          "component": "6a8d9731e8afbcf98fb26237",
+          "element": "55b65e98-86bd-c900-06e0-dfb807b4459e"
+        },
+        "type": "HtmlEmbed",
+        "settings": {
+          "visibility": true
+        }
+      },
+      "file": "original__dashboard__embeds__41-embed.html",
+      "bytes": 35789,
+      "sha256": "a1c6c593b8c6e02a47827c60c51bdfbd94e65a4fe0cad6cf562d4d8c1e22232b",
+      "extracted": [
+        {
+          "file": "style__dashboard__embeds__41-embed.01.css",
+          "sha256": "00d0d6c48a280b7e53765ee4801493f2464d5dff16c0bf6ebdf9fb95b2482638",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__embeds__41-embed.02.js",
+          "sha256": "5657c920833e00f054b447deea567945a70ab2259269e2c9e40dc4b833fd920f",
+          "attributes": ""
+        },
+        {
+          "file": "style__dashboard__embeds__41-embed.03.css",
+          "sha256": "12c6722a2a22e52b73f84eca52579eeef05eabf5486be1c6f8a633c9802b2675",
+          "attributes": ""
+        },
+        {
+          "file": "script__dashboard__embeds__41-embed.04.js",
+          "sha256": "63f3063de4e8c982b269dc008daa7957a054ba2a4bd98323dce6d1cc934ce110",
+          "attributes": ""
+        }
+      ]
+    }
+  ],
+  "registered_script_lookup": [
+    {
+      "label": "site-scripts",
+      "action": "get_site_scripts",
+      "error": {
+        "name": "Error",
+        "message": "NotFoundError\nStatus code: 404\nBody: {\n  \"message\": \"Requested resource not found: Custom code block not found\",\n  \"code\": \"resource_not_found\",\n  \"details\": []\n}",
+        "status": 404,
+        "code": "resource_not_found"
+      }
+    },
+    {
+      "label": "dashboard-scripts",
+      "action": "get_page_scripts",
+      "error": {
+        "name": "Error",
+        "message": "NotFoundError\nStatus code: 404\nBody: {\n  \"message\": \"Requested resource not found: Custom code block not found\",\n  \"code\": \"resource_not_found\",\n  \"details\": []\n}",
+        "status": 404,
+        "code": "resource_not_found"
+      }
+    }
+  ]
+}

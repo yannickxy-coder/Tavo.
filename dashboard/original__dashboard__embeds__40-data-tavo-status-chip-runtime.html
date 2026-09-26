@@ -1,0 +1,630 @@
+<style>
+[data-tavo-status-chip-layer]{
+  pointer-events:none!important;
+}
+[data-tavo-status-chip]{
+  display:inline-flex!important;
+  align-items:center!important;
+  min-height:38px!important;
+  max-width:min(420px,calc(100vw - 32px))!important;
+  padding:6px 13px 6px 7px!important;
+  gap:8px!important;
+  border-radius:999px!important;
+  background:rgba(250,250,250,.96)!important;
+  color:#0d0d0d!important;
+  border:1px solid rgba(255,255,255,.72)!important;
+  box-shadow:
+    0 7px 22px rgba(0,0,0,.13),
+    0 1px 3px rgba(0,0,0,.07),
+    inset 0 1px 0 rgba(255,255,255,.9)!important;
+  -webkit-backdrop-filter:blur(18px) saturate(1.15)!important;
+  backdrop-filter:blur(18px) saturate(1.15)!important;
+  transform-origin:50% 100%!important;
+  overflow:hidden!important;
+  will-change:transform,opacity,filter,clip-path!important;
+}
+[data-tavo-status-chip-icon]{
+  position:relative!important;
+  display:grid!important;
+  place-items:center!important;
+  width:22px!important;
+  height:22px!important;
+  min-width:22px!important;
+  flex:0 0 22px!important;
+  border-radius:999px!important;
+  overflow:visible!important;
+}
+[data-status-chip-icon-view]{
+  position:relative!important;
+  z-index:2!important;
+  width:13px!important;
+  height:13px!important;
+}
+[data-status-chip-icon-view] svg{
+  width:13px!important;
+  height:13px!important;
+  stroke-width:2.5!important;
+}
+[data-tavo-status-chip-copy]{
+  display:flex!important;
+  align-items:center!important;
+  min-width:0!important;
+  padding:0!important;
+}
+[data-tavo-status-chip-title]{
+  font-family:Geist,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;
+  font-size:13px!important;
+  line-height:1.1!important;
+  font-weight:600!important;
+  letter-spacing:-.12px!important;
+  color:#0d0d0d!important;
+  white-space:nowrap!important;
+}
+[data-tavo-status-chip-text]{
+  display:none!important;
+}
+[data-status-chip-icon-burst]{
+  position:absolute;
+  left:50%;
+  top:50%;
+  width:1px;
+  height:1px;
+  pointer-events:none;
+  z-index:1;
+}
+[data-status-chip-ring]{display:none!important}
+[data-tavo-status-chip-action]{
+  display:none;
+  align-items:center!important;
+  height:26px!important;
+  margin-left:4px!important;
+  margin-right:-6px!important;
+  padding:0 11px!important;
+  border:0!important;
+  border-radius:999px!important;
+  background:rgba(13,13,13,.06)!important;
+  color:#2f5bff!important;
+  position:relative!important;
+  overflow:hidden!important;
+  isolation:isolate;
+  font-family:Geist,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;
+  font-size:13px!important;
+  font-weight:600!important;
+  line-height:1!important;
+  white-space:nowrap!important;
+  cursor:pointer!important;
+  pointer-events:auto!important;
+  -webkit-tap-highlight-color:transparent;
+}
+[data-tavo-status-chip-action]:active{opacity:.7}
+[data-tavo-status-chip-action-fill]{
+  position:absolute;
+  left:0;top:0;bottom:0;
+  width:100%;
+  background:rgba(47,91,255,.16);
+  border-radius:inherit;
+  transform-origin:left center;
+  pointer-events:none;
+  z-index:-1;
+}
+[data-tavo-status-chip-action-label]{position:relative;z-index:1}
+[data-tavo-status-chip][data-status-chip-has-action]{pointer-events:auto!important}
+[data-status-chip-spark]{
+  position:absolute;
+  left:0;
+  top:0;
+  opacity:0;
+  transform-origin:center;
+}
+@media(max-width:767px){
+  [data-tavo-status-chip]{
+    min-height:38px!important;
+    padding:6px 12px 6px 7px!important;
+  }
+}
+@media(prefers-reduced-motion:reduce){
+  [data-tavo-status-chip]{will-change:auto!important}
+}
+</style>
+<script>
+/* Status-Chip v3.4
+   show({ …, action: { label, onClick, hold } })   Chip mit Knopf + Countdown
+   deferred({ event, trigger, sheet, run, onUndo, hold })
+     Rückgängig-Fenster für beliebige Aktionen: run() läuft erst nach dem
+     Countdown (oder sofort, wenn die Seite verlassen wird / die nächste
+     Aktion startet). Bei „Rückgängig“ läuft stattdessen onUndo().
+     Ohne sheet: bleibt ein offenes Bottom Sheet stehen — der Chip legt
+     sich dann darüber (z-index). */
+(function(){
+  'use strict';
+  if(window.__TAVO_STATUS_CHIP_V2__) return;
+  window.__TAVO_STATUS_CHIP_V2__ = true;
+
+  var layer = document.querySelector('[data-tavo-status-chip-layer]');
+  var chip = layer && layer.querySelector('[data-tavo-status-chip]');
+  if(!layer || !chip) return;
+
+  var iconWrap = chip.querySelector('[data-tavo-status-chip-icon]');
+  var titleEl = chip.querySelector('[data-tavo-status-chip-title]');
+  var textEl = chip.querySelector('[data-tavo-status-chip-text]');
+  var copyEl = chip.querySelector('[data-tavo-status-chip-copy]');
+  var iconViews = [].slice.call(chip.querySelectorAll('[data-status-chip-icon-view]'));
+
+  var PRESETS = {
+    confirmed:{title:'Reservierung bestätigt',text:'Die Reservierung wurde erfolgreich bestätigt.',icon:'check',tone:'success'},
+    declined:{title:'Reservierung abgelehnt',text:'Die Reservierung wurde abgelehnt.',icon:'x',tone:'danger'},
+    cancelled:{title:'Reservierung storniert',text:'Die Reservierung wurde storniert.',icon:'x',tone:'danger'},
+    message:{title:'Nachricht gesendet',text:'Die Nachricht wurde erfolgreich gesendet.',icon:'message',tone:'success'},
+    change_accepted:{title:'Änderung übernommen',text:'Die Reservierung wurde aktualisiert.',icon:'check',tone:'success'},
+    change_declined:{title:'Änderung abgelehnt',text:'Der Änderungswunsch wurde abgelehnt.',icon:'x',tone:'danger'},
+    no_show:{title:'No-Show markiert',text:'Die Reservierung wurde als No-Show markiert.',icon:'calendar',tone:'info'},
+    saved:{title:'Gespeichert',text:'Die Änderung wurde gespeichert.',icon:'check',tone:'success'}
+  };
+
+  var sequence = 0;
+  var currentAction = null;
+  var actionEl = chip.querySelector('[data-tavo-status-chip-action]');
+  var actionLabel = null, actionFill = null, countdown = null;
+  var running = null;
+
+  function n(v,fallback){
+    var x=parseInt(v,10);
+    return Number.isFinite(x)?x:fallback;
+  }
+  function a(trigger,name){
+    return trigger&&trigger.getAttribute?trigger.getAttribute(name):null;
+  }
+  function wait(ms){
+    return new Promise(function(resolve){setTimeout(resolve,ms);});
+  }
+  function animate(el,frames,opts){
+    if(!el||typeof el.animate!=='function') return Promise.resolve();
+    var animation=el.animate(frames,opts);
+    return animation.finished.catch(function(){});
+  }
+  function reduced(){
+    return !!(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
+  function setIcon(name){
+    iconViews.forEach(function(view){
+      view.style.display=view.getAttribute('data-status-chip-icon-view')===name?'block':'none';
+    });
+  }
+  function setTone(name){
+    if(!iconWrap)return;
+    var map={
+      success:{bg:'#5B8EF5',fg:'#FFFFFF'},
+      danger:{bg:'#C41F45',fg:'#FFFFFF'},
+      info:{bg:'#0D0D0D',fg:'#FFFFFF'}
+    };
+    var t=map[name]||map.info;
+    iconWrap.style.background=t.bg;
+    iconWrap.style.color=t.fg;
+    iconWrap.style.setProperty('--status-chip-accent',t.bg);
+    var burst=iconWrap.querySelector('[data-status-chip-icon-burst]');
+    if(burst) burst.style.color=t.bg;
+  }
+  function findSheet(name){
+    var all=[].slice.call(document.querySelectorAll('[data-sheet]'));
+    return all.find(function(el){return el.getAttribute('data-sheet')===name;})||null;
+  }
+
+  function positionLayer(){
+    var nav=document.querySelector('.fixed-navbar-wrapper');
+    // Über dem Bottom Sheet bleiben: das Sheet liegt bei z-index 99999,
+    // sonst erscheint der Chip hinter dem offenen Sheet.
+    if(layer) layer.style.zIndex='2147483000';
+    if(!nav||!layer)return;
+    var rect=nav.getBoundingClientRect();
+    var above=Math.max(78,Math.round(window.innerHeight-rect.top+10));
+    layer.style.bottom=above+'px';
+  }
+  async function closeSheetFirst(name){
+    if(!name||!window.Sheet||typeof window.Sheet.close!=='function') return;
+    var el=findSheet(name);
+    var wasOpen=!window.Sheet.isOpen||window.Sheet.isOpen(name);
+    if(!wasOpen) return;
+    window.Sheet.close(name);
+    if(!el) { await wait(360); return; }
+
+    var started=performance.now();
+    while(el.hasAttribute('data-sheet-shown')&&performance.now()-started<900){
+      await new Promise(function(resolve){requestAnimationFrame(resolve);});
+    }
+    await wait(24);
+  }
+  function reset(){
+    positionLayer();
+    chip.style.opacity='0';
+    chip.style.visibility='hidden';
+    chip.style.transform='';
+    chip.style.filter='';
+    chip.removeAttribute('data-status-chip-active');
+    chip.setAttribute('data-status-chip-state','idle');
+    setAction(null);
+    if(iconWrap){
+      iconWrap.style.transform='';
+      iconWrap.style.opacity='';
+    }
+  }
+  function ensureBurst(){
+    if(!iconWrap) return null;
+    var burst=iconWrap.querySelector('[data-status-chip-icon-burst]');
+    if(burst) return burst;
+    burst=document.createElement('span');
+    burst.setAttribute('data-status-chip-icon-burst','');
+    burst.style.color=iconWrap.style.getPropertyValue('--status-chip-accent')||'#0E7A55';
+    for(var i=0;i<10;i++){
+      var s=document.createElement('span');
+      s.setAttribute('data-status-chip-spark','');
+      s.setAttribute('data-status-chip-spark-index',String(i));
+      s.style.position='absolute';
+      s.style.left='0';
+      s.style.top='0';
+      s.style.background='currentColor';
+      s.style.opacity='0';
+      if(i%3===0){
+        s.style.width='2px'; s.style.height='7px'; s.style.borderRadius='2px';
+      }else if(i%3===1){
+        s.style.width='4px'; s.style.height='4px'; s.style.borderRadius='1px';
+      }else{
+        s.style.width='3px'; s.style.height='3px'; s.style.borderRadius='999px';
+      }
+      burst.appendChild(s);
+    }
+    iconWrap.appendChild(burst);
+    return burst;
+  }
+  async function iconCelebration(mySeq, iconDelay){
+    if(!iconWrap||reduced()) return;
+    var burst=ensureBurst();
+    if(!burst) return;
+    await wait(iconDelay);
+    if(mySeq!==sequence) return;
+
+    var sparks=[].slice.call(burst.querySelectorAll('[data-status-chip-spark]'));
+    var selected=iconViews.find(function(v){return v.style.display!=='none';});
+
+    var jobs=[
+      animate(iconWrap,[
+        {transform:'scale(1) rotate(0deg)'},
+        {offset:.20,transform:'scale(1.22) rotate(-4deg)'},
+        {offset:.38,transform:'scale(.86) rotate(2deg)'},
+        {offset:.56,transform:'scale(1.12) rotate(-1deg)'},
+        {offset:.72,transform:'scale(.96) rotate(.5deg)'},
+        {offset:.86,transform:'scale(1.04) rotate(0deg)'},
+        {transform:'scale(1) rotate(0deg)'}
+      ],{duration:820,easing:'linear',fill:'both'}),
+      animate(selected,[
+        {transform:'scale(1)'},
+        {offset:.24,transform:'scale(.80)'},
+        {offset:.46,transform:'scale(1.16)'},
+        {offset:.68,transform:'scale(.93)'},
+        {offset:.84,transform:'scale(1.05)'},
+        {transform:'scale(1)'}
+      ],{duration:760,easing:'linear',fill:'both'})
+    ];
+
+    sparks.forEach(function(s,i){
+      var angle=(-104+i*36)*Math.PI/180;
+      var dist=17+(i%3)*4;
+      var x=Math.cos(angle)*dist;
+      var y=Math.sin(angle)*dist;
+      var rot=(i%2?38:-32)+(i*17);
+      jobs.push(animate(s,[
+        {opacity:0,transform:'translate(-50%,-50%) translate(0,0) scale(.1) rotate(0deg)'},
+        {offset:.2,opacity:1,transform:'translate(-50%,-50%) translate('+(x*.38)+'px,'+(y*.38)+'px) scale(1) rotate('+(rot*.45)+'deg)'},
+        {offset:.68,opacity:.9,transform:'translate(-50%,-50%) translate('+(x*.82)+'px,'+(y*.82)+'px) scale(.82) rotate('+(rot*.82)+'deg)'},
+        {opacity:0,transform:'translate(-50%,-50%) translate('+x+'px,'+y+'px) scale(.25) rotate('+rot+'deg)'}
+      ],{duration:500+(i%3)*45,delay:(i%4)*18,easing:'cubic-bezier(.18,.72,.26,1)',fill:'both'}));
+    });
+    await Promise.all(jobs);
+  }
+
+  function stopCountdown(){
+    if(countdown){ try{ countdown.cancel(); }catch(e){} countdown=null; }
+    if(actionFill){
+      if(typeof actionFill.getAnimations==='function'){
+        actionFill.getAnimations().forEach(function(an){ try{ an.cancel(); }catch(e){} });
+      }
+      actionFill.style.transition='none';
+      actionFill.style.transform='scaleX(1)';
+    }
+  }
+  function freshFill(){
+    if(!actionEl) return null;
+    if(!chip.contains(actionEl)) chip.appendChild(actionEl);
+    var neu=document.createElement('span');
+    neu.setAttribute('data-tavo-status-chip-action-fill','');
+    if(actionFill && actionFill.parentNode===actionEl) actionEl.replaceChild(neu,actionFill);
+    else actionEl.insertBefore(neu,actionEl.firstChild);
+    actionFill=neu;
+    return neu;
+  }
+  function startCountdown(ms){
+    stopCountdown();
+    if(!currentAction||!actionEl) return;
+    var fill=freshFill();
+    if(!fill||reduced()) return;
+    chip.setAttribute('data-status-chip-counting','');
+    void fill.offsetWidth;
+    if(typeof fill.animate==='function'){
+      countdown=fill.animate([{transform:'scaleX(1)'},{transform:'scaleX(0)'}],{duration:ms,easing:'linear',fill:'forwards'});
+    }else{
+      fill.style.transition='transform '+ms+'ms linear';
+      requestAnimationFrame(function(){ fill.style.transform='scaleX(0)'; });
+    }
+  }
+  function setAction(action){
+    currentAction = action && action.label && typeof action.onClick === 'function' ? action : null;
+    if(currentAction && !actionEl){
+      actionEl = document.createElement('button');
+      actionEl.type = 'button';
+      actionEl.setAttribute('data-tavo-status-chip-action','');
+      actionFill = document.createElement('span');
+      actionFill.setAttribute('data-tavo-status-chip-action-fill','');
+      actionLabel = document.createElement('span');
+      actionLabel.setAttribute('data-tavo-status-chip-action-label','');
+      actionEl.appendChild(actionFill);
+      actionEl.appendChild(actionLabel);
+      chip.appendChild(actionEl);
+      actionEl.addEventListener('click', function(e){
+        e.preventDefault(); e.stopPropagation();
+        var act = currentAction; if(!act) return;
+        setAction(null);
+        try { act.onClick(); } catch(err) { console.error('[tavo] status-chip action', err); }
+      });
+    }
+    if(actionEl){
+      if(!actionLabel) actionLabel = actionEl.querySelector('[data-tavo-status-chip-action-label]');
+      if(!actionFill) actionFill = actionEl.querySelector('[data-tavo-status-chip-action-fill]');
+      if(actionLabel) actionLabel.textContent = currentAction ? currentAction.label : ''; else actionEl.textContent = currentAction ? currentAction.label : '';
+      stopCountdown();
+      actionEl.style.setProperty('display', currentAction ? 'inline-flex' : 'none', 'important');
+    }
+    chip.toggleAttribute('data-status-chip-has-action', !!currentAction);
+    if(!currentAction) chip.removeAttribute('data-status-chip-counting');
+  }
+  async function show(opts){
+    opts=opts||{};
+    var trigger=opts.trigger||null;
+    var eventName=opts.event||a(trigger,'data-status-chip-event')||'saved';
+    var preset=PRESETS[eventName]||PRESETS.saved;
+    var title=opts.title||a(trigger,'data-status-chip-title')||preset.title||'';
+    var text=opts.text||a(trigger,'data-status-chip-text')||preset.text||'';
+    var icon=opts.icon||a(trigger,'data-status-chip-icon')||preset.icon||'check';
+    var tone=opts.tone||a(trigger,'data-status-chip-tone')||preset.tone||'success';
+    var hold=n(opts.hold||a(trigger,'data-status-chip-hold'),2500);
+    if(opts.action && opts.action.hold) hold=n(opts.action.hold,hold);
+    var enterMs=n(opts.enter||a(trigger,'data-status-chip-enter'),620);
+    var exitMs=n(opts.exit||a(trigger,'data-status-chip-exit'),500);
+    var iconDelay=n(opts.iconDelay||a(trigger,'data-status-chip-icon-delay'),700);
+    var sheetName=opts.sheet||a(trigger,'data-status-chip-close-sheet')||'';
+    var afterClose=n(opts.afterClose||a(trigger,'data-status-chip-after-close'),30);
+
+    sequence+=1;
+    var mySeq=sequence;
+    if(running&&running.cancel) running.cancel();
+
+    chip.setAttribute('data-status-chip-event',eventName);
+    chip.setAttribute('data-status-chip-tone',tone);
+    chip.setAttribute('data-status-chip-icon',icon);
+    if(titleEl) titleEl.textContent=title;
+    if(textEl){
+      textEl.textContent=text;
+      var showText=String(opts.showText||a(trigger,'data-status-chip-show-text')||'false')==='true';
+      textEl.style.setProperty('display',showText&&text?'block':'none','important');
+    }
+    setIcon(icon);
+    setTone(tone);
+    setAction(opts.action||null);
+
+    positionLayer();
+    chip.style.opacity='0';
+    chip.style.visibility='hidden';
+    chip.setAttribute('data-status-chip-state','waiting-sheet');
+
+    document.dispatchEvent(new CustomEvent('tavo:status-chip-waiting',{
+      detail:{event:eventName,sheet:sheetName}
+    }));
+
+    await closeSheetFirst(sheetName);
+    if(mySeq!==sequence) return;
+    if(afterClose) await wait(afterClose);
+    if(mySeq!==sequence) return;
+
+    chip.setAttribute('data-status-chip-state','entering');
+    chip.setAttribute('data-status-chip-active','');
+    chip.style.visibility='visible';
+    chip.style.opacity='1';
+
+    document.dispatchEvent(new CustomEvent('tavo:status-chip-show',{
+      detail:{event:eventName,title:title,text:text,icon:icon,tone:tone,sheet:sheetName}
+    }));
+
+    var reduce=reduced();
+    var enterJobs=[];
+    if(!reduce){
+      enterJobs.push(
+        animate(chip,[
+          {
+            opacity:.08,
+            clipPath:'inset(0 46% 0 46% round 999px)',
+            transform:'translate3d(0,44px,0) scale3d(.92,.52,1)',
+            filter:'blur(2px)'
+          },
+          {
+            offset:.22,
+            opacity:.64,
+            clipPath:'inset(0 31% 0 31% round 999px)',
+            transform:'translate3d(0,28px,0) scale3d(1.02,.74,1)',
+            filter:'blur(1px)'
+          },
+          {
+            offset:.46,
+            opacity:.96,
+            clipPath:'inset(0 10% 0 10% round 999px)',
+            transform:'translate3d(0,8px,0) scale3d(1.035,1.12,1)',
+            filter:'blur(0px)'
+          },
+          {
+            offset:.63,
+            opacity:1,
+            clipPath:'inset(0 0% 0 0% round 999px)',
+            transform:'translate3d(0,-4px,0) scale3d(1.055,.94,1)'
+          },
+          {
+            offset:.76,
+            transform:'translate3d(0,2px,0) scale3d(.982,1.065,1)'
+          },
+          {
+            offset:.87,
+            transform:'translate3d(0,-1px,0) scale3d(1.018,.982,1)'
+          },
+          {
+            offset:.95,
+            transform:'translate3d(0,0,0) scale3d(.995,1.01,1)'
+          },
+          {
+            opacity:1,
+            clipPath:'inset(0 0% 0 0% round 999px)',
+            transform:'translate3d(0,0,0) scale3d(1,1,1)',
+            filter:'blur(0px)'
+          }
+        ],{duration:enterMs,easing:'linear',fill:'forwards'})
+      );
+      enterJobs.push(
+        animate(copyEl,[
+          {opacity:0,transform:'translate3d(-6px,0,0) scale(.96)'},
+          {offset:.55,opacity:.35,transform:'translate3d(-2px,0,0) scale(.985)'},
+          {opacity:1,transform:'translate3d(0,0,0) scale(1)'}
+        ],{duration:280,delay:170,easing:'cubic-bezier(.16,1,.3,1)',fill:'both'})
+      );
+      enterJobs.push(
+        animate(iconWrap,[
+          {opacity:0,transform:'scale(.42)'},
+          {offset:.45,opacity:1,transform:'scale(1.18)'},
+          {offset:.66,transform:'scale(.90)'},
+          {offset:.82,transform:'scale(1.07)'},
+          {transform:'scale(1)'}
+        ],{duration:420,delay:120,easing:'cubic-bezier(.16,1,.3,1)',fill:'both'})
+      );
+    }
+
+    var celebration=iconCelebration(mySeq,iconDelay);
+    await Promise.all(enterJobs);
+    if(mySeq!==sequence) return;
+
+    chip.setAttribute('data-status-chip-state','visible');
+    if(currentAction) startCountdown(hold);
+    await wait(hold);
+    if(mySeq!==sequence) return;
+
+    chip.setAttribute('data-status-chip-state','leaving');
+    if(!reduce){
+      await animate(chip,[
+        {
+          opacity:1,
+          clipPath:'inset(0 0% 0 0% round 999px)',
+          transform:'translate3d(0,0,0) scale3d(1,1,1)',
+          filter:'blur(0px)'
+        },
+        {
+          offset:.18,
+          transform:'translate3d(0,-2px,0) scale3d(1.025,.965,1)'
+        },
+        {
+          offset:.36,
+          opacity:1,
+          clipPath:'inset(0 6% 0 6% round 999px)',
+          transform:'translate3d(0,4px,0) scale3d(.985,1.06,1)'
+        },
+        {
+          offset:.58,
+          opacity:.92,
+          clipPath:'inset(0 20% 0 20% round 999px)',
+          transform:'translate3d(0,18px,0) scale3d(1.025,.84,1)'
+        },
+        {
+          offset:.78,
+          opacity:.64,
+          clipPath:'inset(0 35% 0 35% round 999px)',
+          transform:'translate3d(0,33px,0) scale3d(.96,.68,1)',
+          filter:'blur(.7px)'
+        },
+        {
+          opacity:0,
+          clipPath:'inset(0 47% 0 47% round 999px)',
+          transform:'translate3d(0,47px,0) scale3d(.88,.48,1)',
+          filter:'blur(2px)'
+        }
+      ],{duration:exitMs,easing:'linear',fill:'forwards'});
+    }
+    if(mySeq!==sequence) return;
+
+    reset();
+    document.dispatchEvent(new CustomEvent('tavo:status-chip-hide',{
+      detail:{event:eventName,sheet:sheetName}
+    }));
+    running=null;
+  }
+
+  /* ── Rückgängig-Fenster für beliebige Aktionen ───────────── */
+  var pendingJob=null;
+  function flushPending(){
+    var j=pendingJob; if(!j) return;
+    pendingJob=null; clearTimeout(j.timer);
+    try{
+      var p=j.run&&j.run();
+      if(p&&typeof p.catch==='function') p.catch(function(err){ console.error('[tavo] Aktion',err); });
+    }catch(err){ console.error('[tavo] Aktion',err); }
+  }
+  function deferred(o){
+    o=o||{};
+    if(pendingJob) flushPending();
+    var hold=n(o.hold,6000);
+    var job={ run:o.run, onUndo:o.onUndo, event:o.event||'saved' };
+    job.timer=setTimeout(function(){ if(pendingJob===job) flushPending(); }, hold+4000);
+    pendingJob=job;
+    var opts={};
+    Object.keys(o).forEach(function(k){ if(['run','onUndo','hold','undoLabel','undoneTitle'].indexOf(k)<0) opts[k]=o[k]; });
+    opts.action={ label:o.undoLabel||'Rückgängig', hold:hold, onClick:function(){
+      if(pendingJob!==job) return;
+      pendingJob=null; clearTimeout(job.timer);
+      show({ event:'undone', title:o.undoneTitle||'Rückgängig gemacht', icon:'check', tone:'info', hold:1600 });
+      if(typeof job.onUndo==='function'){ try{ job.onUndo(); }catch(err){ console.error('[tavo] Rückgängig',err); } }
+    }};
+    show(opts);
+    return {
+      commit:function(){ if(pendingJob===job) flushPending(); },
+      cancel:function(){ if(pendingJob===job){ pendingJob=null; clearTimeout(job.timer); } }
+    };
+  }
+  document.addEventListener('tavo:status-chip-hide',function(e){
+    if(pendingJob&&e.detail&&e.detail.event===pendingJob.event) flushPending();
+  });
+  window.addEventListener('pagehide',flushPending);
+  document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='hidden') flushPending(); });
+
+  window.Tavo=window.Tavo||{};
+  window.Tavo.statusChip={
+    show:show,
+    deferred:deferred,
+    flush:flushPending,
+    hide:function(){sequence+=1;reset();running=null;},
+    presets:PRESETS,
+    setPreset:function(name,value){PRESETS[name]=Object.assign({},PRESETS[name]||{},value||{});}
+  };
+
+  window.addEventListener('resize',positionLayer,{passive:true});
+  document.addEventListener('tavo:status-chip',function(e){show((e&&e.detail)||{});});
+  document.addEventListener('click',function(e){
+    var trigger=e.target.closest&&e.target.closest('[data-status-chip-trigger]');
+    if(!trigger)return;
+    e.preventDefault();
+    show({trigger:trigger});
+  });
+
+  reset();
+})();
+</script>

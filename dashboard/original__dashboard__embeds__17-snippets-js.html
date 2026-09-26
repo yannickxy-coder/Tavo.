@@ -1,0 +1,455 @@
+<style>
+  [data-snippet] { cursor: pointer; user-select: none; }
+  [data-snippet]:not([data-snippet-icon="off"])::before {
+    content: "+";
+    display: inline-block;
+    margin-right: .45em;
+    font-variant-numeric: tabular-nums;
+    opacity: .55;
+    transition: opacity .15s ease;
+  }
+  [data-snippet][aria-pressed="true"]:not([data-snippet-icon="off"])::before {
+    content: "\00D7";
+    opacity: .8;
+  }
+  [data-snippet]:hover::before { opacity: .9; }
+  [data-snippet]:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 4px rgba(149,56,31,.28);
+  }
+  [data-snippet][aria-disabled="true"] { opacity: .45; }
+  [data-snippet-input] {
+    --snippet-flash-color: #2F5BFF;
+    --snippet-flash-color-remove: #6e6e73;
+    --snippet-flash-bg: #fbf0eb;
+    --snippet-flash-bg-remove: #ededf0;
+    transition: color .18s ease, background-color .18s ease;
+  }
+  [data-snippet-input][data-snippet-flash="add"] { color: var(--snippet-flash-color) !important; }
+  [data-snippet-input][data-snippet-flash="remove"] { color: var(--snippet-flash-color-remove) !important; }
+  [data-snippet-input][data-snippet-bg][data-snippet-flash="add"] { background-color: var(--snippet-flash-bg) !important; }
+  [data-snippet-input][data-snippet-bg][data-snippet-flash="remove"] { background-color: var(--snippet-flash-bg-remove) !important; }
+  [data-snippet-undo] { display: none; }
+  [data-snippet-undo][data-snippet-visible] { display: inline-flex; }
+  [data-snippet-counter][data-snippet-over] { color: #95381f; }
+  [data-snippet-var] { display: none; }
+  .snippet-live {
+    position: absolute !important;
+    width: 1px; height: 1px;
+    margin: -1px; padding: 0; border: 0;
+    clip: rect(0 0 0 0); clip-path: inset(50%);
+    overflow: hidden; white-space: nowrap;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [data-snippet-input], [data-snippet]::before { transition: none; }
+  }
+</style>
+<script>
+(function () {
+  'use strict';
+  /* ============================================================
+   SNIPPETS v3.1 · Textbausteine aus Supabase
+   Aufbau und Attribute wie v3. Neu in 3.1:
+   · Welche Chips zu welchem Feld gehören, wird einmal beim Bauen
+     ermittelt statt bei jedem Tastendruck seitenweit gesucht.
+   · Platzhalter ({vorname} …) werden pro Chip einmal aufgelöst und
+     erst bei neuer Reservierung / neuen Einstellungen neu.
+   · Tippen: Größe, Zähler und Chip-Zustand laufen gebündelt in
+     einem Frame statt synchron bei jedem Zeichen.
+
+   <textarea data-snippet-input="zusage" data-snippet-max="600">
+   <div data-snippet-list="zusage">
+     <div data-snippet-template><div data-snippet-label></div></div>
+   </div>
+   data-snippet-clear / -undo / -counter="zusage"
+   Platzhalter-Quellen: window.tavoSnippetVars → [data-snippet-var]
+   → offene Reservierung (tavo:open)
+   ============================================================ */
+
+  var used = new WeakMap();
+  var undoBuf = {}, undoTimer = {};
+  var live, geladen = [];
+  var aktuelleReservierung = null;
+  var gen = 0;
+  var chipsByInput = new Map();
+
+  function announce(msg) {
+    if (!live) {
+      live = document.createElement('div');
+      live.className = 'snippet-live';
+      live.setAttribute('aria-live', 'polite');
+      document.body.appendChild(live);
+    }
+    live.textContent = msg;
+  }
+
+  var sep     = function (i) { var s = i.getAttribute('data-snippet-separator'); return s === null ? ' ' : s; };
+  var maxLen  = function (i) { var m = parseInt(i.getAttribute('data-snippet-max') || '', 10); return isNaN(m) ? 0 : m; };
+  var groupOf = function (c) { return c.getAttribute('data-snippet-exclusive') || ''; };
+
+  function opt(chip, name, fallback) {
+    if (chip.hasAttribute('data-snippet-' + name)) return chip.getAttribute('data-snippet-' + name);
+    var host = chip.closest('[data-snippet-' + name + ']');
+    return host ? host.getAttribute('data-snippet-' + name) : fallback;
+  }
+
+  function inputFor(chip) {
+    if (chip._snInput && chip._snInput.isConnected) return chip._snInput;
+    var key = chip.getAttribute('data-snippet-for');
+    if (!key) {
+      var list = chip.closest('[data-snippet-list]');
+      if (list) key = list.getAttribute('data-snippet-list');
+    }
+    var found = null;
+    if (key) found = document.querySelector('[data-snippet-input="' + key + '"]');
+    if (!found) {
+      var scope = chip.closest('[data-snippet-scope], [data-sheetnav-page], form');
+      if (scope) found = scope.querySelector('[data-snippet-input]');
+    }
+    if (!found) {
+      var all = document.querySelectorAll('[data-snippet-input]');
+      found = all.length === 1 ? all[0] : null;
+    }
+    chip._snInput = found;
+    return found;
+  }
+
+  function orderTarget(chip) {
+    if (chip._snOrder) return chip._snOrder;
+    var el = chip, out = chip;
+    for (var i = 0; i < 6 && el.parentElement && el.parentElement !== document.body; i++) {
+      var d = getComputedStyle(el.parentElement).display;
+      if (d.indexOf('flex') > -1 || d.indexOf('grid') > -1) { out = el; break; }
+      el = el.parentElement;
+    }
+    chip._snOrder = out;
+    return out;
+  }
+
+  function indexChips() {
+    chipsByInput = new Map();
+    document.querySelectorAll('[data-snippet]').forEach(function (chip) {
+      var input = inputFor(chip);
+      if (!input) return;
+      if (!chipsByInput.has(input)) chipsByInput.set(input, []);
+      chipsByInput.get(input).push(chip);
+    });
+  }
+  function chipsFor(input) { return chipsByInput.get(input) || []; }
+
+  var WD = ['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag'];
+  var pad = function (n) { return String(n).padStart(2, '0'); };
+  var resWerte = null;
+  function reservierungsWerte() {
+    if (resWerte) return resWerte;
+    var r = aktuelleReservierung;
+    if (!r) return (resWerte = {});
+    var d = window.tavoWall ? window.tavoWall(r.reserved_at) : new Date(r.reserved_at);
+    var teile = (r.guest_name || '').split(/\s+/);
+    resWerte = {
+      vorname:   teile[0] || '',
+      nachname:  teile.slice(1).join(' '),
+      name:      r.guest_name || '',
+      datum:     pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear(),
+      uhrzeit:   pad(d.getHours()) + ':' + pad(d.getMinutes()),
+      wochentag: WD[d.getDay()],
+      personen:  String(r.party_size || ''),
+      nummer:    r.reference || ''
+    };
+    return resWerte;
+  }
+  function getVar(name) {
+    var k = name.toLowerCase();
+    if (window.tavoSnippetVars && window.tavoSnippetVars[k]) return window.tavoSnippetVars[k];
+    var el = document.querySelector('[data-snippet-var="' + k + '"]');
+    if (el && el.textContent.trim()) return el.textContent.trim();
+    return reservierungsWerte()[k] || null;
+  }
+  function resolveVars(raw) {
+    return raw.replace(/\{([a-zA-Z0-9_äöüÄÖÜß]+)\}/g, function (treffer, name) {
+      var v = getVar(name);
+      return v === null || v === undefined ? treffer : v;
+    });
+  }
+  function textOf(chip) {
+    if (chip._snGen === gen) return chip._snText;
+    var raw = (chip.getAttribute('data-snippet-text') || '').trim();
+    chip._snText = raw ? resolveVars(raw) : raw;
+    chip._snGen = gen;
+    return chip._snText;
+  }
+  function neueWerte() { gen++; resWerte = null; }
+
+  function join(cur, text, glue) {
+    return cur.trim() ? cur.replace(/\s+$/, '') + glue + text : text;
+  }
+  function strip(cur, text, glue) {
+    var i = cur.lastIndexOf(text);
+    if (i === -1) return cur;
+    var out = cur.slice(0, i) + cur.slice(i + text.length);
+    if (glue.trim() === '') out = out.replace(/[ \t]{2,}/g, ' ');
+    return out.replace(/^\s+/, '').replace(/\s+$/, '');
+  }
+  function shouldFocus(input) {
+    var mode = input.getAttribute('data-snippet-focus') || 'auto';
+    if (mode === 'never') return false;
+    if (mode === 'always') return true;
+    return !matchMedia('(hover: none) and (pointer: coarse)').matches;
+  }
+  function autosize(input) {
+    if (input.tagName !== 'TEXTAREA') return;
+    input.style.height = 'auto';
+    input.style.height = input.scrollHeight + 'px';
+  }
+  function counters(input) {
+    var key = input.getAttribute('data-snippet-input');
+    var max = maxLen(input);
+    if (!input._snCounters) input._snCounters = [].slice.call(document.querySelectorAll('[data-snippet-counter="' + key + '"]'));
+    var n = input.value.length;
+    input._snCounters.forEach(function (el) {
+      var t = max ? n + ' / ' + max : String(n);
+      if (el.textContent !== t) el.textContent = t;
+      el.toggleAttribute('data-snippet-over', !!(max && n > max * 0.9));
+    });
+  }
+  function flash(input, kind) {
+    input.setAttribute('data-snippet-flash', kind || '');
+    clearTimeout(input._snapT);
+    input._snapT = setTimeout(function () { input.removeAttribute('data-snippet-flash'); }, 620);
+    if (input.tagName === 'TEXTAREA') input.scrollTop = input.scrollHeight;
+  }
+  function syncChips(input) {
+    var list = used.get(input) || [];
+    var val = input.value;
+    chipsFor(input).forEach(function (chip) {
+      var text = textOf(chip);
+      var drin = text && val.indexOf(text) !== -1;
+      var idx = list.indexOf(text);
+      if (idx !== -1 && !drin) list.splice(idx, 1);
+      var on = list.indexOf(text) !== -1 && drin;
+      if (chip._snOn === on) return;
+      chip._snOn = on;
+      chip.classList.toggle(opt(chip, 'class', 'is-active'), on);
+      chip.setAttribute('aria-pressed', on ? 'true' : 'false');
+      if (opt(chip, 'sort', '') === 'active-first') orderTarget(chip).style.order = on ? '-1' : '0';
+    });
+    used.set(input, list);
+  }
+  function commit(input, value, kind) {
+    input.value = value;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    autosize(input); counters(input); syncChips(input); flash(input, kind);
+  }
+  function deactivate(input, chip) {
+    var list = used.get(input) || [];
+    var text = textOf(chip);
+    var i = list.indexOf(text);
+    if (i === -1) return input.value;
+    list.splice(i, 1);
+    used.set(input, list);
+    return strip(input.value, text, sep(input));
+  }
+
+  function toggle(chip) {
+    var input = inputFor(chip);
+    if (!input) return;
+    var text = textOf(chip);
+    if (!text) return;
+    var list = used.get(input) || [];
+    var isOn = list.indexOf(text) !== -1 && input.value.indexOf(text) !== -1;
+    var glue = sep(input);
+    var value = input.value;
+
+    if (isOn) {
+      commit(input, deactivate(input, chip), 'remove');
+      announce('Baustein entfernt.');
+    } else {
+      var grp = groupOf(chip);
+      if (grp) {
+        chipsFor(input).forEach(function (other) {
+          if (other === chip || groupOf(other) !== grp) return;
+          if ((used.get(input) || []).indexOf(textOf(other)) === -1) return;
+          value = deactivate(input, other);
+          input.value = value;
+        });
+      }
+      var next = join(value, text, glue);
+      var max = maxLen(input);
+      if (max && next.length > max) {
+        announce('Zeichenlimit erreicht. Der Baustein passt nicht mehr ins Feld.');
+        chip.setAttribute('aria-disabled', 'true');
+        setTimeout(function () { chip.removeAttribute('aria-disabled'); }, 1600);
+        return;
+      }
+      (used.get(input) || []).push(text);
+      commit(input, next, 'add');
+      announce('Baustein eingefügt.');
+    }
+
+    if (shouldFocus(input)) {
+      input.focus({ preventScroll: true });
+      try { input.setSelectionRange(input.value.length, input.value.length); } catch (e) {}
+    }
+    document.dispatchEvent(new CustomEvent('snippet:change', {
+      detail: {
+        input: input.getAttribute('data-snippet-input'),
+        name: chip.textContent.trim(),
+        text: text, active: !isOn, value: input.value
+      }
+    }));
+  }
+
+  var gebaut = false;
+  function chipsRendern() {
+    document.querySelectorAll('[data-snippet-list]').forEach(function (liste) {
+      var formular = liste.getAttribute('data-snippet-list');
+      if (!formular) return;
+      var vorlage = liste._snippetTpl || liste.querySelector('[data-snippet-template]');
+      if (!vorlage) return console.warn('[Snippets] Keine [data-snippet-template] in', liste);
+      if (!liste._snippetTpl) {
+        liste._snippetTpl = vorlage.cloneNode(true);
+        liste._snippetTpl.removeAttribute('data-snippet-template');
+      }
+      var passend = geladen.filter(function (s) {
+        return s.forms.indexOf(formular) > -1 || s.forms.indexOf('alle') > -1;
+      });
+      var frag = document.createDocumentFragment();
+      passend.forEach(function (s) {
+        var chip = liste._snippetTpl.cloneNode(true);
+        chip.setAttribute('data-snippet', '');
+        chip.setAttribute('data-snippet-text', s.body);
+        if (s.exclusive_group) chip.setAttribute('data-snippet-exclusive', s.exclusive_group);
+        chip.setAttribute('data-snippet-id', s.id);
+        var label = chip.querySelector('[data-snippet-label]');
+        (label || chip).textContent = s.name;
+        frag.appendChild(chip);
+      });
+      liste.textContent = '';
+      liste.appendChild(frag);
+      liste.toggleAttribute('data-snippet-empty', passend.length === 0);
+    });
+    gebaut = true;
+    bind();
+    indexChips();
+    chipsByInput.forEach(function (_, input) { syncChips(input); });
+  }
+
+  function werteNeu() {
+    neueWerte();
+    chipsByInput.forEach(function (chips, input) {
+      chips.forEach(function (c) { c._snOn = undefined; });
+      syncChips(input);
+    });
+  }
+
+  async function laden() {
+    var db = window.tavoDB;
+    if (!db) return console.warn('[Snippets] window.tavoDB fehlt — Core nicht geladen?');
+    var res = await db.from('snippets')
+      .select('id,name,body,forms,exclusive_group,position,restaurant_id')
+      .eq('active', true)
+      .order('position', { ascending: true });
+    if (res.error) return console.error('[Snippets]', res.error.message);
+    geladen = res.data.sort(function (a, b) {
+      if (!!a.restaurant_id !== !!b.restaurant_id) return a.restaurant_id ? -1 : 1;
+      return a.position - b.position;
+    });
+    chipsRendern();
+    document.dispatchEvent(new CustomEvent('snippets:loaded', { detail: { count: geladen.length } }));
+  }
+
+  function bind() {
+    document.querySelectorAll('[data-snippet]').forEach(function (chip) {
+      if (chip.dataset.snippetBound) return;
+      chip.dataset.snippetBound = '1';
+      if (!chip.hasAttribute('tabindex') && chip.tagName !== 'BUTTON' && chip.tagName !== 'A') chip.setAttribute('tabindex', '0');
+      if (!chip.hasAttribute('role') && chip.tagName !== 'BUTTON') chip.setAttribute('role', 'button');
+      chip.setAttribute('aria-pressed', 'false');
+      chip.addEventListener('click', function (e) { e.preventDefault(); toggle(chip); });
+      chip.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(chip); }
+      });
+    });
+
+    document.querySelectorAll('[data-snippet-input]').forEach(function (input) {
+      if (input.dataset.snippetBound) return;
+      input.dataset.snippetBound = '1';
+      if (!used.has(input)) used.set(input, []);
+      var geplant = false;
+      input.addEventListener('input', function () {
+        if (geplant) return;
+        geplant = true;
+        requestAnimationFrame(function () {
+          geplant = false;
+          autosize(input); counters(input); syncChips(input);
+        });
+      });
+      autosize(input); counters(input);
+    });
+
+    document.querySelectorAll('[data-snippet-clear]').forEach(function (btn) {
+      if (btn.dataset.snippetBound) return;
+      btn.dataset.snippetBound = '1';
+      btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        var key = btn.getAttribute('data-snippet-clear');
+        var input = document.querySelector('[data-snippet-input="' + key + '"]');
+        if (!input || !input.value) return;
+        undoBuf[key] = { value: input.value, used: (used.get(input) || []).slice() };
+        used.set(input, []);
+        commit(input, '', 'remove');
+        document.querySelectorAll('[data-snippet-undo="' + key + '"]').forEach(function (el) {
+          el.setAttribute('data-snippet-visible', '');
+        });
+        clearTimeout(undoTimer[key]);
+        undoTimer[key] = setTimeout(function () {
+          document.querySelectorAll('[data-snippet-undo="' + key + '"]').forEach(function (el) {
+            el.removeAttribute('data-snippet-visible');
+          });
+          delete undoBuf[key];
+        }, 8000);
+        announce('Feld geleert. Rückgängig ist acht Sekunden lang möglich.');
+      });
+    });
+
+    document.querySelectorAll('[data-snippet-undo]').forEach(function (btn) {
+      if (btn.dataset.snippetBound) return;
+      btn.dataset.snippetBound = '1';
+      btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        var key = btn.getAttribute('data-snippet-undo');
+        var buf = undoBuf[key];
+        var input = document.querySelector('[data-snippet-input="' + key + '"]');
+        if (!buf || !input) return;
+        used.set(input, buf.used);
+        commit(input, buf.value, 'add');
+        btn.removeAttribute('data-snippet-visible');
+        delete undoBuf[key];
+        clearTimeout(undoTimer[key]);
+        announce('Text wiederhergestellt.');
+      });
+    });
+  }
+
+  document.addEventListener('tavo:open', function (e) {
+    aktuelleReservierung = e.detail;
+    if (gebaut) werteNeu();
+    else neueWerte();
+  });
+  document.addEventListener('tavo:settings', function () { if (gebaut) werteNeu(); });
+
+  window.Snippets = {
+    reload: laden,
+    refresh: chipsRendern,
+    reset: function (key) {
+      var input = document.querySelector('[data-snippet-input="' + key + '"]');
+      if (input) { used.set(input, []); syncChips(input); }
+    },
+    get data() { return geladen; }
+  };
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', laden);
+  else laden();
+})();
+</script>

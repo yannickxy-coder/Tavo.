@@ -1,0 +1,615 @@
+<script src="https://cdnjs.cloudflare.com/ajax/libs/list.js/2.3.1/list.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.min.js"></script>
+<script>window.TAVO_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indpd2hic3p3a3Vla3hrZGlxY2dkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczNDQ4NzYsImV4cCI6MjEwMjkyMDg3Nn0.X4lLnTq0JjlLuS81-YMB-V2yBmw0fO2n0dcTgZ1k7Js";</script>
+<script>
+/* tavo — Ladezustand: Skeletons bis die ersten Daten da sind */
+(function () {
+ 'use strict';
+ var TIMEOUT = 8000;
+ var root = document.documentElement;
+ var done = false;
+ root.setAttribute('data-res-loading', '');
+ function hideEmpties(hide) {
+  document.querySelectorAll('[data-res-empty]').forEach(function (el) {
+   if (hide) {
+    el.dataset.resEmptyHidden = '1';
+    el.style.display = 'none';
+   } else if (el.dataset.resEmptyHidden) {
+    delete el.dataset.resEmptyHidden;
+    el.style.display = '';
+   }
+  });
+ }
+ function buildSkeletons() {
+  document.querySelectorAll('[data-res-skeleton]').forEach(function (wrap) {
+   var item = wrap.querySelector('[data-res-skeleton-item]');
+   if (!item) return;
+   var n = parseInt(wrap.getAttribute('data-res-skeleton-count'), 10) || 3;
+   wrap.querySelectorAll('[data-res-skeleton-clone]').forEach(function (c) { c.remove(); });
+   for (var i = 1; i < n; i++) {
+    var clone = item.cloneNode(true);
+    clone.removeAttribute('data-res-skeleton-item');
+    clone.setAttribute('data-res-skeleton-clone', '');
+    wrap.appendChild(clone);
+   }
+   wrap.style.display = '';
+  });
+ }
+ function finish(reason) {
+  if (done) return;
+  done = true;
+  root.removeAttribute('data-res-loading');
+  root.setAttribute('data-res-loaded', reason || 'ok');
+  document.querySelectorAll('[data-res-skeleton]').forEach(function (wrap) {
+   wrap.style.display = 'none';
+  });
+  hideEmpties(false);
+  if (window.tavoReservierungen) window.tavoReservierungen.refresh();
+ }
+ function boot() {
+  hideEmpties(true);
+  buildSkeletons();
+  setTimeout(function () { finish('timeout'); }, TIMEOUT);
+ }
+ document.readyState === 'loading'
+  ? document.addEventListener('DOMContentLoaded', boot)
+  : boot();
+ document.addEventListener('tavo:hydrated', function () { finish('ok'); });
+})();
+</script>
+<script>
+/* ============================================================
+   tavo — Core v4 (Datenschicht)
+   Ersetzt den alten Hydrator. Baut KEIN DOM mehr — hält die
+   Reservierungen als Daten (window.tavoStore) und meldet
+   Änderungen per Event "tavo:data". Gerendert wird von
+   tavo-reservierungen v4 (Embed im Body).
+
+   · Paginiert statt hartem limit(500). Vorher fielen bei vielen
+     Buchungen die ZUKÜNFTIGEN weg (aufsteigend sortiert, nach 500
+     abgeschnitten).
+   · Offene Anfragen werden immer geladen, auch wenn sie älter
+     als das Zeitfenster sind.
+   · Realtime als Delta (eine Zeile) statt Komplett-Neuladen.
+   · Polling nur noch als Rückfall, wenn Realtime nicht steht.
+   · Schreiben ist optimistisch: die Liste reagiert sofort.
+   · Session + Mitgliedschaft einmal (window.tavoSession).
+   Zeitfenster: data-res-past-days="60" am [data-res-config]
+   ============================================================ */
+(function () {
+  'use strict';
+
+  var cfgEl = document.querySelector('[data-res-config]');
+  var attr = function (n, d) {
+    var v = cfgEl && cfgEl.getAttribute('data-res-' + n);
+    return v == null || v === '' ? d : v;
+  };
+
+  var CFG = {
+    url: 'https://wiwhbszwkuekxkdiqcgd.supabase.co',
+    anonKey: window.TAVO_ANON_KEY,
+    pastDays: parseInt(attr('past-days', '60'), 10) || 60,
+    page: 1000,
+    maxRows: 20000,
+    fallbackPollMs: 30000,
+    safetyReloadMs: 300000,
+    debounceMs: 80
+  };
+
+  var SELECT = 'id,reference,guest_name,guest_email,guest_phone,party_size,' +
+    'reserved_at,status,note,reply,newsletter,created_at,updated_at,decided_at,' +
+    'change_reserved_at,change_party_size,change_note,change_reply,' +
+    'change_requested_at,change_decided_at,change_seating_area_id,' +
+    'source,guest_salutation,table_label,table_ids,' +
+    'seating_area_id,seating_areas(name)';
+
+  var db = window.supabase.createClient(CFG.url, CFG.anonKey);
+  window.tavoDB = db;
+  window.tavoSupabase = db;
+
+  var rows = new Map();
+  var areas = new Map();
+  var rid = null;
+  var version = 0;
+  var sinceMs = 0;
+
+  window.tavoStore = {
+    get: function (id) { return rows.get(id) || null; },
+    all: function () { return Array.from(rows.values()); },
+    areaName: function (id) { return (id && areas.get(id)) || ''; },
+    get size() { return rows.size; },
+    get version() { return version; },
+    get restaurantId() { return rid; },
+    ready: false
+  };
+
+  window.tavoSession = (async function () {
+    var s = (await db.auth.getSession()).data;
+    if (!s.session) { location.href = '/login'; return null; }
+    var m = await db.from('memberships').select('restaurant_id, role')
+      .eq('user_id', s.session.user.id);
+    if (m.error || !m.data || !m.data.length) {
+      console.error('[tavo] Membership fehlt für diesen User');
+      return null;
+    }
+    return { user: s.session.user, restaurantId: m.data[0].restaurant_id, role: m.data[0].role };
+  })();
+
+  var pending = null, pendingIds = new Set(), pendingFull = false;
+  function emit(ids, full) {
+    if (full) pendingFull = true;
+    (ids || []).forEach(function (i) { pendingIds.add(i); });
+    if (pending) return;
+    pending = setTimeout(function () {
+      pending = null;
+      version++;
+      var detail = { full: pendingFull, ids: Array.from(pendingIds), version: version };
+      pendingIds.clear(); pendingFull = false;
+      document.dispatchEvent(new CustomEvent('tavo:data', { detail: detail }));
+    }, CFG.debounceMs);
+  }
+
+  function withArea(r) {
+    var name = r.seating_area_id ? (areas.get(r.seating_area_id) || '') : '';
+    r.seating_areas = name ? { name: name } : null;
+    return r;
+  }
+  function inWindow(r) {
+    return r.status === 'pending' || r.status === 'change_requested' ||
+      Date.parse(r.reserved_at) >= sinceMs;
+  }
+
+  async function pageAll(build) {
+    var out = [];
+    for (var from = 0; out.length < CFG.maxRows; from += CFG.page) {
+      var res = await build().range(from, from + CFG.page - 1);
+      if (res.error) throw res.error;
+      out = out.concat(res.data);
+      if (res.data.length < CFG.page) break;
+    }
+    return out;
+  }
+
+  async function loadAreas() {
+    var res = await db.from('seating_areas').select('id,name').eq('restaurant_id', rid);
+    if (res.error) return console.warn('[tavo]', res.error.message);
+    areas = new Map(res.data.map(function (a) { return [a.id, a.name]; }));
+  }
+
+  var loading = null, again = false;
+  function load() {
+    if (!rid) return Promise.resolve();
+    if (loading) { again = true; return loading; }
+    loading = (async function () {
+      var d = new Date(); d.setHours(0, 0, 0, 0);
+      sinceMs = d.getTime() - CFG.pastDays * 864e5;
+      var since = new Date(sinceMs).toISOString();
+
+      var both = await Promise.all([
+        pageAll(function () {
+          return db.from('reservations').select(SELECT)
+            .eq('restaurant_id', rid).gte('reserved_at', since)
+            .order('reserved_at', { ascending: true }).order('id', { ascending: true });
+        }),
+        pageAll(function () {
+          return db.from('reservations').select(SELECT)
+            .eq('restaurant_id', rid).lt('reserved_at', since)
+            .in('status', ['pending', 'change_requested'])
+            .order('reserved_at', { ascending: true }).order('id', { ascending: true });
+        })
+      ]);
+
+      var next = new Map();
+      both[0].concat(both[1]).forEach(function (r) { next.set(r.id, r); });
+      rows = next;
+      window.tavoStore.ready = true;
+      emit(null, true);
+    })().catch(function (e) {
+      console.error('[tavo] Laden:', e && e.message || e);
+    }).finally(function () {
+      loading = null;
+      if (again) { again = false; load(); }
+    });
+    return loading;
+  }
+  window.tavoReload = load;
+
+  var live = false;
+  async function onChange(p) {
+    if (p.eventType === 'DELETE') {
+      var gone = p.old && p.old.id;
+      if (gone && rows.delete(gone)) emit([gone]);
+      return;
+    }
+    var n = p.new;
+    if (!n || !n.id) return;
+    if (n.seating_area_id && !areas.has(n.seating_area_id)) await loadAreas();
+    withArea(n);
+    if (!inWindow(n)) { if (rows.delete(n.id)) emit([n.id]); return; }
+    rows.set(n.id, n);
+    emit([n.id]);
+  }
+
+  function subscribe() {
+    db.channel('res-' + rid)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'reservations',
+        filter: 'restaurant_id=eq.' + rid
+      }, onChange)
+      .subscribe(function (status) {
+        var war = live;
+        live = status === 'SUBSCRIBED';
+        if (live && !war && window.tavoStore.ready) load();
+      });
+  }
+
+  async function patch(id, local, remote) {
+    var row = rows.get(id);
+    var snap = row ? Object.assign({}, row) : null;
+    if (row) { Object.assign(row, local); withArea(row); emit([id]); }
+    var res = await db.from('reservations').update(remote || local).eq('id', id);
+    if (res.error) {
+      if (snap) { rows.set(id, snap); emit([id]); }
+      console.error('[tavo]', res.error.message);
+      throw res.error;
+    }
+    if (!row) load();
+  }
+
+  window.tavoSetStatus = function (id, status) {
+    return patch(id, { status: status });
+  };
+
+  window.tavoSetArea = function (id, areaId) {
+    return patch(id, { seating_area_id: areaId || null }, { seating_area_id: areaId || null });
+  };
+
+  /* Änderungswunsch übernehmen über die DB-Funktion accept_change,
+     damit auch der gewünschte Sitzbereich mitkommt. */
+  window.tavoAcceptChange = async function (id) {
+    var row = rows.get(id);
+    var snap = row ? Object.assign({}, row) : null;
+    if (row) {
+      Object.assign(row, {
+        reserved_at: row.change_reserved_at || row.reserved_at,
+        party_size: row.change_party_size || row.party_size,
+        seating_area_id: row.change_seating_area_id || row.seating_area_id,
+        status: 'confirmed',
+        change_reserved_at: null, change_party_size: null, change_seating_area_id: null,
+        change_decided_at: new Date().toISOString()
+      });
+      withArea(row); emit([id]);
+    }
+    var res = await db.rpc('accept_change', { res_id: id });
+    if (res.error) {
+      if (snap) { rows.set(id, snap); emit([id]); }
+      console.error('[tavo] accept_change:', res.error.message);
+      alert('Die \u00c4nderung konnte nicht \u00fcbernommen werden.');
+      throw res.error;
+    }
+  };
+
+  window.tavoSession.then(async function (s) {
+    if (!s) return;
+    rid = s.restaurantId;
+    await loadAreas();
+    await load();
+    subscribe();
+
+    setInterval(function () {
+      if (!document.hidden && !live) load();
+    }, CFG.fallbackPollMs);
+    setInterval(function () {
+      if (!document.hidden) load();
+    }, CFG.safetyReloadMs);
+
+    var hiddenAt = 0;
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) { hiddenAt = Date.now(); return; }
+      if (Date.now() - hiddenAt > 30000) load();
+    });
+  });
+})();
+</script>
+<script>
+/* tavo — Nutzer, Betrieb & Logout
+   data-user-name / -email / -initials / -role / -avatar / -avatar-fallback
+   data-auth-logout
+   data-restaurant-name / -initials / -address / -city / -phone / -email
+   Nutzt window.tavoSession aus dem Core. */
+(function () {
+  'use strict';
+
+  document.addEventListener('click', async function (e) {
+    var btn = e.target.closest && e.target.closest('[data-auth-logout]');
+    if (!btn) return;
+    e.preventDefault();
+    var db = window.tavoDB;
+    if (db) { try { await db.auth.signOut(); } catch (err) {} }
+    window.location.href = '/login';
+  });
+
+  var ROLLEN = { owner: 'Inhaber', staff: 'Mitarbeiter' };
+  function set(sel, val) {
+    document.querySelectorAll(sel).forEach(function (el) { el.textContent = val; });
+  }
+  function initialen(text) {
+    return (text || '').split(/\s+/).slice(0, 2)
+      .map(function (w) { return w[0] || ''; }).join('').toUpperCase();
+  }
+  function stadtAusAdresse(adresse) {
+    if (!adresse) return '';
+    var teil = adresse.split(',').pop().trim();
+    return teil.replace(/^\d+\s*/, '');
+  }
+
+  (async function () {
+    var db = window.tavoDB;
+    if (!db || !window.tavoSession) return console.warn('[tavo] Core nicht geladen');
+    var s = await window.tavoSession;
+    if (!s) return;
+    var user = s.user;
+
+    var profilRes = db.from('profiles').select('display_name, avatar_url').eq('id', user.id).single();
+    var restRes = db.from('restaurants').select('id, name, address, phone, email, ref_prefix')
+      .eq('id', s.restaurantId).single();
+
+    var p = null;
+    try { p = (await profilRes).data; } catch (err) {}
+
+    var name = (p && p.display_name) || user.email.split('@')[0];
+    var url  = p && p.avatar_url;
+    set('[data-user-name]', name);
+    set('[data-user-email]', user.email);
+    set('[data-user-initials]', initialen(name));
+    if (ROLLEN[s.role]) set('[data-user-role]', ROLLEN[s.role]);
+
+    document.querySelectorAll('[data-user-avatar]').forEach(function (el) {
+      if (url) { el.src = url; el.removeAttribute('srcset'); el.style.display = ''; }
+      else el.style.display = 'none';
+    });
+    document.querySelectorAll('[data-user-avatar-fallback]').forEach(function (el) {
+      el.style.display = url ? 'none' : '';
+    });
+
+    var rres = await restRes;
+    if (rres.error) return console.warn('[tavo]', rres.error.message);
+    var r = rres.data;
+    window.tavoRestaurant = window.tavoRestaurant || r;
+
+    set('[data-restaurant-name]', r.name || '');
+    set('[data-restaurant-initials]', r.ref_prefix ? r.ref_prefix.slice(0, 2) : initialen(r.name));
+    set('[data-restaurant-address]', r.address || '');
+    set('[data-restaurant-city]', stadtAusAdresse(r.address));
+    set('[data-restaurant-phone]', r.phone || '');
+    set('[data-restaurant-email]', r.email || '');
+  })();
+})();
+</script>
+
+<script>
+/* ============================================================
+   tavo — Posteingang
+   Liest die Tabelle "notifications", schreibt nur "gelesen" und
+   "weggewischt".
+
+   <div data-inbox-list>
+     <div data-inbox-template>
+       data-inbox-title / -body / -time / -cta
+       data-inbox-dot       nur bei ungelesen sichtbar
+       data-inbox-dismiss   wischt diesen Eintrag weg
+     </div>
+   </div>
+   data-inbox-empty · data-inbox-badge · data-inbox-mark-all
+   data-inbox-type="neue_anfrage"   Filter-Chip (+ data-inbox-type-count)
+
+   Event: tavo:inbox  { count, unread }
+   API:   Tavo.markRead(id) · markAllRead() · openFromInbox(id) · dismiss(id)
+   ============================================================ */
+(function () {
+  'use strict';
+
+  var alle = [];
+  var aktivFilter = null;
+
+  var pad = function (n) { return String(n).padStart(2, '0'); };
+  function relZeit(iso) {
+    var m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (m < 1) return 'gerade eben';
+    if (m < 60) return 'vor ' + m + ' Min';
+    var h = Math.floor(m / 60);
+    if (h < 24) return 'vor ' + h + ' Std';
+    var d = new Date(iso);
+    return pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.';
+  }
+  function ungelesen() {
+    return alle.filter(function (n) { return !n.read_at; }).length;
+  }
+
+  function badge() {
+    var u = ungelesen();
+    document.querySelectorAll('[data-inbox-badge]').forEach(function (el) {
+      el.textContent = u > 0 ? String(u) : '';
+      el.style.display = u > 0 ? '' : 'none';
+    });
+    document.querySelectorAll('[data-inbox-dot]').forEach(function (el) {
+      if (el.closest('[data-inbox-id]')) return;
+      el.style.display = u > 0 ? '' : 'none';
+    });
+  }
+
+  function rendern() {
+    var host = document.querySelector('[data-inbox-list]');
+    if (!host) return;
+
+    var tpl = host._tpl || host.querySelector('[data-inbox-template]');
+    if (!tpl) return console.warn('[tavo] [data-inbox-template] fehlt');
+    if (!host._tpl) { host._tpl = tpl.cloneNode(true); host._tpl.removeAttribute('data-inbox-template'); }
+
+    var zeilen = aktivFilter ? alle.filter(function (n) { return n.type === aktivFilter; }) : alle;
+
+    var frag = document.createDocumentFragment();
+    zeilen.forEach(function (n) {
+      var el = host._tpl.cloneNode(true);
+      el.setAttribute('data-inbox-id', n.id);
+      el.setAttribute('data-inbox-item-type', n.type);
+      el.toggleAttribute('data-inbox-unread', !n.read_at);
+
+      var t = el.querySelector('[data-inbox-title]'); if (t) t.textContent = n.title;
+      var b = el.querySelector('[data-inbox-body]');  if (b) b.textContent = n.body || '';
+      var z = el.querySelector('[data-inbox-time]');  if (z) z.textContent = relZeit(n.created_at);
+      var c = el.querySelector('[data-inbox-cta]');
+      if (c) { c.textContent = n.cta_label || ''; c.style.display = n.cta_label ? '' : 'none'; }
+      var d = el.querySelector('[data-inbox-dot]');
+      if (d) d.style.display = n.read_at ? 'none' : '';
+      frag.appendChild(el);
+    });
+    host.textContent = '';
+    host.appendChild(frag);
+
+    var empty = document.querySelector('[data-inbox-empty]');
+    if (empty) empty.style.display = zeilen.length ? 'none' : '';
+
+    var proTyp = {};
+    alle.forEach(function (x) { proTyp[x.type] = (proTyp[x.type] || 0) + 1; });
+    document.querySelectorAll('[data-inbox-type]').forEach(function (chip) {
+      var typ = chip.getAttribute('data-inbox-type');
+      var z = chip.querySelector('[data-inbox-type-count]');
+      if (z) z.textContent = proTyp[typ] || 0;
+      chip.classList.toggle('is-active', aktivFilter === typ);
+    });
+
+    badge();
+    document.dispatchEvent(new CustomEvent('tavo:inbox', {
+      detail: { count: alle.length, unread: ungelesen() }
+    }));
+  }
+
+  var geplant = false;
+  function bald() {
+    if (geplant) return;
+    geplant = true;
+    requestAnimationFrame(function () { geplant = false; rendern(); });
+  }
+
+  async function laden() {
+    var db = window.tavoDB;
+    if (!db || !window.tavoSession) return console.warn('[tavo] Core fehlt');
+    var s = await window.tavoSession;
+    if (!s) return;
+    var rid = s.restaurantId;
+
+    var res = await db.from('notifications')
+      .select('*')
+      .eq('restaurant_id', rid)
+      .is('dismissed_at', null)
+      .order('priority', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (res.error) return console.error('[tavo]', res.error.message);
+    alle = res.data;
+    rendern();
+
+    db.channel('inbox-' + rid)
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'notifications',
+        filter: 'restaurant_id=eq.' + rid
+      }, function (payload) {
+        alle.unshift(payload.new);
+        if (alle.length > 100) alle.length = 100;
+        bald();
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'notifications',
+        filter: 'restaurant_id=eq.' + rid
+      }, function (payload) {
+        if (payload.new.dismissed_at) {
+          alle = alle.filter(function (n) { return n.id !== payload.new.id; });
+        } else {
+          var i = alle.findIndex(function (n) { return n.id === payload.new.id; });
+          if (i > -1) alle[i] = payload.new;
+        }
+        bald();
+      })
+      .subscribe();
+  }
+
+  window.Tavo = window.Tavo || {};
+
+  window.Tavo.markRead = async function (id) {
+    var n = alle.find(function (x) { return x.id === id; });
+    if (!n || n.read_at) return;
+    n.read_at = new Date().toISOString();
+    rendern();
+    var res = await window.tavoDB.from('notifications').update({ read_at: n.read_at }).eq('id', id);
+    if (res.error) console.error('[tavo]', res.error.message);
+  };
+
+  window.Tavo.dismiss = async function (id) {
+    var vorher = alle;
+    alle = alle.filter(function (n) { return n.id !== id; });
+    rendern();
+    var res = await window.tavoDB.from('notifications')
+      .update({ dismissed_at: new Date().toISOString() }).eq('id', id);
+    if (res.error) { alle = vorher; rendern(); console.error('[tavo]', res.error.message); }
+  };
+
+  window.Tavo.markAllRead = async function () {
+    var jetzt = new Date().toISOString();
+    var ids = alle.filter(function (n) { return !n.read_at; }).map(function (n) { return n.id; });
+    if (!ids.length) return;
+    alle.forEach(function (n) { if (!n.read_at) n.read_at = jetzt; });
+    rendern();
+    var res = await window.tavoDB.from('notifications').update({ read_at: jetzt }).in('id', ids);
+    if (res.error) console.error('[tavo]', res.error.message);
+  };
+
+  /* Öffnet die Reservierung im Detail-Sheet. Liegt sie schon im
+     Speicher, ohne Netzwerk — sonst frisch nachladen. */
+  window.Tavo.openFromInbox = async function (id) {
+    var n = alle.find(function (x) { return x.id === id; });
+    if (!n) return;
+    Tavo.markRead(id);
+    if (!n.reservation_id) return;
+
+    var cached = window.tavoStore && window.tavoStore.get(n.reservation_id);
+    if (cached) {
+      document.dispatchEvent(new CustomEvent('tavo:open', { detail: cached }));
+      return;
+    }
+    var res = await window.tavoDB.from('reservations')
+      .select('*,seating_areas(name)').eq('id', n.reservation_id).single();
+    if (res.error) return console.error('[tavo]', res.error.message);
+    document.dispatchEvent(new CustomEvent('tavo:open', { detail: res.data }));
+  };
+
+  document.addEventListener('click', function (e) {
+    var weg = e.target.closest('[data-inbox-dismiss]');
+    if (weg) {
+      e.preventDefault(); e.stopPropagation();
+      var host = weg.closest('[data-inbox-id]');
+      if (host) Tavo.dismiss(host.getAttribute('data-inbox-id'));
+      return;
+    }
+    var item = e.target.closest('[data-inbox-id]');
+    if (item) { e.preventDefault(); Tavo.openFromInbox(item.getAttribute('data-inbox-id')); return; }
+
+    var chip = e.target.closest('[data-inbox-type]');
+    if (chip) {
+      e.preventDefault();
+      var typ = chip.getAttribute('data-inbox-type');
+      aktivFilter = aktivFilter === typ ? null : typ;
+      rendern();
+      return;
+    }
+    if (e.target.closest('[data-inbox-mark-all]')) {
+      e.preventDefault();
+      Tavo.markAllRead();
+    }
+  });
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', laden);
+  else laden();
+})();
+</script>

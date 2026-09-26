@@ -1,0 +1,1075 @@
+<script>
+/* ============================================================
+   tavo — Reservierungen v4.9
+   Rendert alle [data-res-list] aus window.tavoStore (Zeitzone des
+   Restaurants, Knoten-Wiederverwendung, seitenweises Nachladen).
+   Pro Liste: data-res-page-size · data-res-limit="5" (fest, kein
+   Nachladen) · data-res-sheet-list (schläft bis switchList) ·
+   data-res-group="day" (Tagesköpfe zwischen den Zeilen) oder
+   data-res-group="box" (je Tag Überschrift + eigene Box).
+   Vorlagen (versteckt): [data-res-group-template] bzw.
+   [data-res-group-box-template] mit [data-res-group-label],
+   [data-res-group-meta], [data-res-group-box]. Event tavo:rendered.
+   v4.5: data-res-start="today" (mit Limit) zeigt die nächsten ab heute;
+   L.lo = erster gerenderter Eintrag (Fenster lo..limit).
+   v4.6: Felder area (+ data-res-wrap="area") · table („Tisch 12" / „Tische
+   10 + 20" / „Kein Tisch") · table_label (nur Nummer). data-res-field-empty=
+   "…" = Ersatztext bei leerem Feld. Zeile: data-res-table="12" bzw. "none".
+   v4.7: table kürzt: „Tische 40–45, 50–55" · „Tische 10, 12 +2".
+   data-res-table-max="2" (Blöcke) am Feld. Detail-Sheet-Zeit: eigenes Embed.
+   v4.8: data-res-start="now" (mit Limit) ab jetzt − Kulanz · data-res-hide-cancelled.
+   v4.9: "now" beginnt immer beim nächsten Gast (keine Vergangenen zum Auffüllen).
+   ============================================================ */
+(() => {
+  'use strict';
+
+  const A = 'data-res';
+  const qa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+  /* ── Notiz-Kategorien (wie v3) ─────────────────────────────── */
+  const NOTE_RULES = [
+    ['allergie',     ['allergie','allergisch','unverträglich','unvertraeglich','zöliakie','zoeliakie','laktose','gluten','nuss','nüsse','erdnuss','schalentiere','meeresfrüchte','histamin','anaphyl','sellerie']],
+    ['barrierefrei', ['rollstuhl','rollator','barrierefrei','gehbehind','stufenlos','ebenerdig']],
+    ['kinder',       ['hochstuhl','kinderstuhl','kinderwagen','kindersitz','baby','kleinkind','kinderteller']],
+    ['geburtstag',   ['geburtstag','geburi','bday','wiegenfest']],
+    ['jubilaeum',    ['jubiläum','jubilaeum','hochzeitstag','silberhochzeit','goldene hochzeit','verlobung']],
+    ['feier',        ['hochzeit','taufe','kommunion','konfirmation','firmung','trauerfeier','beerdigung','abschluss','polterabend']],
+    ['ernaehrung',   ['vegan','vegetarisch','veggie','halal','koscher','glutenfrei','laktosefrei','fleischlos']],
+    ['hund',         ['hund','hunde','vierbeiner']],
+    ['tisch',        ['fensterplatz','terrasse','draußen','draussen','nebenzimmer','ruhiger tisch','ruhigen tisch','kamin','separee','séparée']],
+    ['geschaeftlich',['geschäftsessen','geschaeftsessen','firmenessen','auf rechnung','firmenrechnung','meeting','tagung']]
+  ];
+  const NOTE_LABELS = {
+    allergie:'Allergie', barrierefrei:'Barrierefrei', kinder:'Kinder',
+    geburtstag:'Geburtstag', jubilaeum:'Jubiläum', feier:'Feier',
+    ernaehrung:'Ernährung', hund:'Hund', tisch:'Tischwunsch',
+    geschaeftlich:'Geschäftlich', sonstiges:'Notiz'
+  };
+  const NEG_RE = ['kein','keine','keinen','ohne','nicht'].map(n => new RegExp('\\b' + n + '\\b[^.,;]{0,8}$'));
+  const noteCache = new Map();
+  function classifyNote(raw) {
+    const note = (raw || '').toLowerCase().trim();
+    if (!note) return null;
+    if (noteCache.has(note)) return noteCache.get(note);
+    let out = 'sonstiges';
+    outer: for (const [cat, words] of NOTE_RULES) {
+      for (const w of words) {
+        const at = note.indexOf(w);
+        if (at > -1) {
+          const before = note.slice(Math.max(0, at - 16), at);
+          if (!NEG_RE.some(re => re.test(before))) { out = cat; break outer; }
+        }
+      }
+    }
+    noteCache.set(note, out);
+    return out;
+  }
+
+  /* ── Kategorien (wie v3) ───────────────────────────────────── */
+  const CATS = {
+    heute:      { match: (r,c) => r.key === c.todayKey,                          cancelled:true,  sort:'asc' },
+    morgen:     { match: (r,c) => r.key === c.tomorrowKey,                       cancelled:true,  sort:'asc' },
+    woche:      { match: (r,c) => r.day >= c.todayStart && r.day <= c.weekEnd,    cancelled:true,  sort:'asc' },
+    offen:      { match: r => r.open,                                            cancelled:false, sort:'asc' },
+    gruppen:    { match: (r,c) => r.start >= c.now && r.guests >= c.groupSize,    cancelled:false, sort:'asc' },
+    besonderes: { match: (r,c) => !!r.note && r.start >= c.todayStart,            cancelled:false, sort:'asc' },
+    'notizen-heute':  { match: (r,c) => !!r.note && r.key === c.todayKey,          cancelled:false, sort:'asc' },
+    'notizen-morgen': { match: (r,c) => !!r.note && r.key === c.tomorrowKey,       cancelled:false, sort:'asc' },
+    'notizen-woche':  { match: (r,c) => !!r.note && r.day >= c.todayStart && r.day <= c.weekEnd, cancelled:false, sort:'asc' },
+    anstehend:  { match: (r,c) => r.day > c.todayStart,                           cancelled:false, sort:'asc' },
+    alle:       { match: () => true,                                             cancelled:true,  sort:'asc' },
+    vergangen:  { match: (r,c) => r.start < c.now && r.key !== c.todayKey,        cancelled:true,  sort:'desc' }
+  };
+
+  const DEFAULTS = {
+    heute: { kicker: 'Reservierungen heute',
+      sub: '{guests} Gäste[?remaining] · nächste um {nextTime} Uhr[/][?allDone] · letzte um {lastTime} Uhr[/][?cancelled] · {cancelledLabel}[/]',
+      subEmpty: 'Heute ist nichts gebucht', subClosed: '{closedLabel}', subFallback: 'Heute ist nichts gebucht',
+      pill: '{today}', pillEmpty: '{today}' },
+    morgen: { kicker: 'Reservierungen morgen',
+      sub: '{guests} Gäste · erste um {firstTime} Uhr[?cancelled] · {cancelledLabel}[/]',
+      subEmpty: 'Morgen ist noch nichts gebucht', subClosed: '{closedLabel}',
+      pill: '{tomorrow}', pillEmpty: '{tomorrow}' },
+    woche: { kicker: 'Diese Woche',
+      sub: '{guests} Gäste an {days} Tagen[?busiest] · am vollsten {busiest}[/]',
+      subEmpty: 'Diese Woche ist nichts gebucht', pill: 'Bis {weekEnd}', pillEmpty: 'Bis {weekEnd}' },
+    offen: { kicker: 'Offene Anfragen', sub: '{guests} Gäste warten auf Antwort', subEmpty: 'Alles beantwortet',
+      pill: 'Längste Wartezeit: {wait}', pillEmpty: 'Nichts offen', pillFallback: 'Offene Anfragen' },
+    gruppen: { kicker: 'Große Runden', sub: '{guests} Gäste · größter Tisch {maxGuests} Personen',
+      subEmpty: 'Keine Gruppen ab {groupSize} Gästen', pill: 'Ab {groupSize} Gästen', pillEmpty: 'Ab {groupSize} Gästen' },
+    'notizen-heute':  { kicker: 'Besonderes', sub: '{bookings} mit Notiz', subEmpty: 'Keine Notizen für heute', pill: '', pillEmpty: '' },
+    'notizen-morgen': { kicker: 'Besonderes', sub: '{bookings} mit Notiz', subEmpty: 'Keine Notizen für morgen', pill: '', pillEmpty: '' },
+    'notizen-woche':  { kicker: 'Besonderes', sub: '{bookings} mit Notiz', subEmpty: 'Keine Notizen diese Woche', pill: '', pillEmpty: '' },
+    besonderes: { kicker: 'Besonderes', sub: '{notes} Reservierungen mit Notiz', subEmpty: 'Keine Notizen', pill: '', pillEmpty: '' },
+    anstehend: { kicker: 'Anstehende Reservierungen', sub: '{guests} Gäste[?remaining] · nächste {next} um {nextTime} Uhr[/]',
+      subEmpty: 'Keine Buchungen ab morgen', pill: 'Ab morgen', pillEmpty: 'Ab morgen' },
+    alle: { kicker: 'Alle Reservierungen', sub: '{guests} Gäste · {open} unbeantwortet[?cancelled] · {cancelledLabel}[/]',
+      subEmpty: 'Noch keine Reservierungen eingegangen', pill: '{range}', pillEmpty: 'Noch nichts geplant', pillFallback: 'Alle Zeiträume' },
+    vergangen: { kicker: 'Vergangene Reservierungen', sub: '{guests} Gäste[?noshow] · {noshowLabel}[/][?cancelled] · {cancelledLabel}[/]',
+      subEmpty: 'Noch keine Historie', pill: 'Bis {last}', pillEmpty: '' }
+  };
+
+  const FALLBACK = 'Keine kommenden Reservierungen';
+  const OPEN_STATES = ['offen','open','ausstehend','pending',''];
+  const CANCELLED_STATES = ['storniert','abgelehnt','cancelled','canceled','declined','absage'];
+  const NOSHOW_STATES = ['no-show','noshow','nicht erschienen','nicht-erschienen'];
+  const DB_STATUS = { pending:'offen', change_requested:'offen', confirmed:'bestaetigt',
+                      declined:'abgelehnt', cancelled:'storniert', no_show:'no-show' };
+
+  const UNITS = { min:'Min.', hour:'Std.', day:'T', space:' ' };
+  const WD = ['So','Mo','Di','Mi','Do','Fr','Sa'];
+  const WD_LONG = ['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag'];
+  const MONTHS = ['Januar','Februar','März','April','Mai','Juni','Juli','August','September','Oktober','November','Dezember'];
+  const pad = n => String(n).padStart(2,'0');
+  const dayKey = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  const fmtShort = d => `${WD[d.getDay()]}, ${pad(d.getDate())}.${pad(d.getMonth()+1)}.`;
+  const fmtLong = d => `${WD[d.getDay()]}, ${pad(d.getDate())}.${pad(d.getMonth()+1)}.${d.getFullYear()}`;
+  const fmtDate = d => `${pad(d.getDate())}.${pad(d.getMonth()+1)}.${d.getFullYear()}`;
+  const fmtTime = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const plural = (n, one, many) => (n === 1 ? `1 ${one}` : `${n} ${many}`);
+
+  function formatDuration(ms) {
+    if (ms == null || ms < 0) return '';
+    const sp = UNITS.space;
+    const m = Math.floor(ms / 60000);
+    if (m < 1) return `1${sp}${UNITS.min}`;
+    if (m < 60) return `${m}${sp}${UNITS.min}`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}${sp}${UNITS.hour}`;
+    const d = Math.floor(h / 24), rest = h % 24;
+    return rest ? `${d}${sp}${UNITS.day} ${rest}${sp}${UNITS.hour}` : `${d}${sp}${UNITS.day}`;
+  }
+
+  /* Nur schreiben, wenn sich etwas ändert — jede Schreiboperation
+     weckt ResizeObserver & Co. im Tabs-Skript. */
+  const setText = (el, v) => { v = v == null ? '' : String(v); if (el.textContent !== v) el.textContent = v; };
+  const setShow = (el, on) => { const v = on ? '' : 'none'; if (el.style.display !== v) el.style.display = v; };
+  const setAttr = (el, n, v) => {
+    if (v == null || v === false) { if (el.hasAttribute(n)) el.removeAttribute(n); }
+    else { v = String(v); if (el.getAttribute(n) !== v) el.setAttribute(n, v); }
+  };
+
+  /* ── Konfiguration ───────────────────────────────────────── */
+  function readConfig() {
+    const el = document.querySelector(`[${A}-config]`);
+    const num = (n, d) => { const v = parseInt(el && el.getAttribute(`${A}-${n}`), 10); return isNaN(v) ? d : v; };
+    const str = (n, d) => (el && el.getAttribute(`${A}-${n}`)) || d;
+    const hour = s => { const m = String(s).match(/^(\d{1,2})/); return m ? +m[1] : null; };
+    return {
+      capacity: num('capacity', 0),
+      closedWeekdays: str('closed-weekdays','').split(',').map(s => parseInt(s,10)).filter(n => !isNaN(n)),
+      serviceStart: hour(str('service-start','17:00')),
+      serviceEnd: hour(str('service-end','22:00')),
+      tz: str('timezone', 'Europe/Berlin')
+    };
+  }
+  let CONF = null;
+
+  /* ── Zeitzone ────────────────────────────────────────────── */
+  let tzFmt = null, tzName = null;
+  function wall(ms) {
+    if (!tzFmt || tzName !== CONF.tz) {
+      tzName = CONF.tz;
+      try {
+        tzFmt = new Intl.DateTimeFormat('en-CA', { timeZone: tzName, year:'numeric', month:'2-digit',
+          day:'2-digit', hour:'2-digit', minute:'2-digit', hourCycle:'h23' });
+      } catch (e) { tzFmt = null; }
+    }
+    if (!tzFmt) return new Date(ms);
+    const p = {};
+    tzFmt.formatToParts(ms).forEach(x => { if (x.type !== 'literal') p[x.type] = +x.value; });
+    return new Date(p.year, p.month - 1, p.day, p.hour === 24 ? 0 : p.hour, p.minute);
+  }
+  window.tavoWall = iso => wall(Date.parse(iso));
+
+  function parseDay(str) {
+    if (!str) return null;
+    const s = String(str).trim();
+    let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) return new Date(+m[1], +m[2]-1, +m[3]);
+    m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+    if (m) return new Date(+m[3], +m[2]-1, +m[1]);
+    return null;
+  }
+  function readClosures() {
+    return qa(`[${A}-closed]`).map(el => ({
+      from: parseDay(el.getAttribute(`${A}-closed-from`)),
+      to: parseDay(el.getAttribute(`${A}-closed-to`)) || parseDay(el.getAttribute(`${A}-closed-from`)),
+      label: (el.getAttribute(`${A}-closed-label`) || 'Geschlossen').trim()
+    })).filter(c => c.from);
+  }
+  function closureFor(date, closures) {
+    for (const c of closures) if (date >= c.from && date <= c.to) return c.label;
+    if (CONF.closedWeekdays.includes(date.getDay())) return 'Ruhetag';
+    return null;
+  }
+
+  /* ── Daten → abgeleitete Zeilen ──────────────────────────── */
+  const derived = new WeakMap();
+  function derive(r, nowMs) {
+    let c = derived.get(r);
+    if (!c || c.src !== r.reserved_at || c.tz !== CONF.tz) {
+      const start = wall(Date.parse(r.reserved_at));
+      const day = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+      c = { src: r.reserved_at, tz: CONF.tz, start, day, key: dayKey(day) };
+      derived.set(r, c);
+    }
+    const status = DB_STATUS[r.status] || 'offen';
+    const note = (r.note || '').trim();
+    const created = r.created_at ? Date.parse(r.created_at) : NaN;
+    return {
+      id: r.id, raw: r, start: c.start, day: c.day, key: c.key,
+      guests: parseInt(r.party_size, 10) || 0,
+      status,
+      cancelled: CANCELLED_STATES.includes(status),
+      noshow: NOSHOW_STATES.includes(status),
+      open: OPEN_STATES.includes(status),
+      note, noteCat: classifyNote(note),
+      wait: isNaN(created) ? null : nowMs - created
+    };
+  }
+
+  /* ── Scope / Keys (wie v3, mit Cache) ──────────────────────── */
+  let ACTIVE = null;
+  let STATS = {};
+  const KEY_ANCESTORS = [`${A}-hero`, 'data-tabs-idle', `${A}-scope`];
+  const scopeCache = new WeakMap();
+  function scopeOf(el) {
+    if (scopeCache.has(el)) return scopeCache.get(el);
+    let out = null;
+    for (const attr of KEY_ANCESTORS) {
+      const host = el.closest(`[${attr}]`);
+      if (host) { const v = (host.getAttribute(attr) || '').trim(); if (v) { out = { host, key: v }; break; } }
+    }
+    scopeCache.set(el, out);
+    return out;
+  }
+  const VALUE_ATTRS = [`${A}-value`, `${A}-text`];
+  function keyOf(el, attr) {
+    if (!VALUE_ATTRS.includes(attr)) {
+      const v = (el.getAttribute(attr) || '').trim();
+      if (v) return v;
+    }
+    const s = scopeOf(el);
+    return s ? s.key : ACTIVE;
+  }
+  function cfgAttr(el, key, name) {
+    const own = el.getAttribute(`${A}-${name}`);
+    if (own !== null) return own;
+    const s = scopeOf(el);
+    const fromScope = s && s.host.getAttribute(`${A}-${name}`);
+    if (fromScope != null) return fromScope;
+    const hero = document.querySelector(`[${A}-hero="${key}"]`);
+    const fromHero = hero && hero.getAttribute(`${A}-${name}`);
+    return fromHero != null ? fromHero : null;
+  }
+  function fill(tpl, tokens) {
+    if (!tpl) return '';
+    let out = tpl.replace(/\[\?(\w+)\]([\s\S]*?)\[\/\]/g, (_, k, inner) => {
+      const v = tokens[k];
+      return (!v || v === '0' || v === 0) ? '' : inner;
+    });
+    let miss = false;
+    out = out.replace(/\{(\w+)\}/g, (_, k) => {
+      const v = tokens[k];
+      if (v === '' || v == null) { miss = true; return ''; }
+      return v;
+    });
+    return miss ? '' : out.trim();
+  }
+
+  /* ══ Listen ═══════════════════════════════════════════════════ */
+  let proto = null;
+  let gproto = null, bproto = null;
+  let LISTS = [];
+  const DEFAULT_PAGE = 40;
+
+  function setupProto() {
+    if (proto) return true;
+    const tpl = document.querySelector(`[${A}-template]`);
+    if (!tpl || !tpl.children.length) { console.error('[tavo] [data-res-template] fehlt oder ist leer'); return false; }
+    proto = tpl.cloneNode(true);
+    proto.removeAttribute(`${A}-template`);
+    proto.style.display = '';
+    tpl.remove();
+    [['group-template', p => { gproto = p; }], ['group-box-template', p => { bproto = p; }]].forEach(([n, put]) => {
+      const t = document.querySelector(`[${A}-${n}]`);
+      if (t) { put(t.firstElementChild ? t.firstElementChild.cloneNode(true) : null); t.remove(); }
+    });
+    return true;
+  }
+
+  function groupNode(kind) {
+    const box = kind === 'box', p = box ? bproto : gproto;
+    let n;
+    if (p) n = p.cloneNode(true);
+    else {
+      n = document.createElement('div');
+      n.className = box ? 'res-day' : 'res-day-head';
+      const head = `<div class="res-day-label" ${A}-group-label></div><div class="res-day-meta" ${A}-group-meta></div>`;
+      n.innerHTML = box ? `<div class="res-day-top">${head}</div><div class="res-day-box" ${A}-group-box></div>` : head;
+    }
+    n.setAttribute(`${A}-group-head`, '');
+    n._label = n.querySelector(`[${A}-group-label]`);
+    n._meta = n.querySelector(`[${A}-group-meta]`);
+    n._box = box ? (n.querySelector(`[${A}-group-box]`) || n) : null;
+    return n;
+  }
+  function dayLong(day) {
+    const now = wall(Date.now());
+    const s = `${WD_LONG[day.getDay()]}, ${day.getDate()}. ${MONTHS[day.getMonth()]}`;
+    return day.getFullYear() !== now.getFullYear() ? `${s} ${day.getFullYear()}` : s;
+  }
+  function dayLabel(day) {
+    const now = wall(Date.now());
+    const t = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const diff = Math.round((day - t) / 86400000);
+    if (diff === 0) return 'Heute';
+    if (diff === 1) return 'Morgen';
+    if (diff === -1) return 'Gestern';
+    const s = `${WD_LONG[day.getDay()]}, ${pad(day.getDate())}.${pad(day.getMonth()+1)}.`;
+    return day.getFullYear() !== t.getFullYear() ? s + day.getFullYear() : s;
+  }
+
+  function setupLists() {
+    qa(`[${A}-list]`).forEach(host => {
+      if (host._tavo) return;
+      const pageAttr = host.getAttribute(`${A}-page-size`);
+      const search = host.closest('[data-live-search]');
+      const grace = host.getAttribute(`${A}-grace-min`);
+      const cap = Math.max(0, parseInt(host.getAttribute(`${A}-limit`), 10) || 0);
+      const inSheet = host.hasAttribute(`${A}-sheet-list`);
+      const L = {
+        host,
+        key: (host.getAttribute(`${A}-list`) || '').trim(),
+        windowDays: parseInt(host.getAttribute(`${A}-range-days`), 10),
+        cancelClass: host.getAttribute(`${A}-cancelled-class`) || 'is-storniert',
+        groupSize: parseInt(host.getAttribute(`${A}-group-size`), 10) || 6,
+        grace: (grace === null ? 15 : parseInt(grace, 10) || 0) * 60000,
+        sort: host.getAttribute(`${A}-sort`),
+        pageSize: (search || cap) ? 0 : (pageAttr === null ? DEFAULT_PAGE : Math.max(0, parseInt(pageAttr, 10) || 0)),
+        cap, inSheet, idle: inSheet,
+        from: host.getAttribute(`${A}-start`), noCx: host.hasAttribute(`${A}-hide-cancelled`),
+        group: ['day','box'].includes((host.getAttribute(`${A}-group`) || '').trim()) ? host.getAttribute(`${A}-group`).trim() : '',
+        groups: new Map(),
+        search,
+        nodes: new Map(),
+        matches: [],
+        limit: 0,
+        sentinel: null
+      };
+      L.cat = CATS[L.key] || CATS.alle;
+      L.ownGroup = L.group;
+      L.limit = cap || L.pageSize;
+      host._tavo = L;
+
+      // Alles, was der Designer in die Liste gelegt hat, fliegt raus —
+      // wie beim alten Hydrator (innerHTML = '').
+      host.textContent = '';
+
+      // Ein Klick-Handler pro Liste statt einer pro Zeile.
+      host.addEventListener('click', e => {
+        const item = e.target.closest(`[${A}-item]`);
+        if (!item || !host.contains(item)) return;
+        const opener = item.querySelector(`[${A}-open]`);
+        if (opener && !opener.contains(e.target)) return;
+        const row = window.tavoStore && window.tavoStore.get(item.getAttribute(`${A}-id`));
+        if (!row) return;
+        e.preventDefault();
+        document.dispatchEvent(new CustomEvent('tavo:open', { detail: row }));
+      });
+
+      attachSentinel(L);
+      LISTS.push(L);
+    });
+    LISTS = LISTS.filter(L => L.host.isConnected);
+  }
+
+  /* Nachladen beim Scrollen: ein unsichtbarer Marker hinter der Liste. */
+  function attachSentinel(L) {
+    if (!(L.pageSize > 0) || !('IntersectionObserver' in window)) return;
+    L.sentinel = document.createElement('div');
+    L.sentinel.setAttribute(`${A}-sentinel`, '');
+    L.sentinel.style.cssText = 'height:1px;width:100%;pointer-events:none;';
+    L.host.after(L.sentinel);
+    L.io = new IntersectionObserver(entries => {
+      if (!entries.some(e => e.isIntersecting)) return;
+      if (L.limit >= L.matches.length) return;
+      L.limit += L.pageSize;
+      reconcile(L);
+      requestAnimationFrame(() => { L.io.unobserve(L.sentinel); L.io.observe(L.sentinel); });
+    }, { rootMargin: '0px 0px 800px 0px' });
+    L.io.observe(L.sentinel);
+  }
+
+  function buildNode(L) {
+    const n = proto.cloneNode(true);
+    if (L && L.itemClass) n.className = L.itemClass;
+    n._fields = qa(`[${A}-field]`, n).map(el => { const k = el.getAttribute(`${A}-field`), e = el.getAttribute(`${A}-field-empty`);
+      return [el, k, e != null ? e : k === 'table' ? 'Kein Tisch' : '', parseInt(el.getAttribute(`${A}-table-max`), 10) || 2]; });
+    n._wraps = qa(`[${A}-wrap]`, n).map(el => [el, el.getAttribute(`${A}-wrap`)]);
+    n._badge = n.querySelector(`[${A}-wait]`);
+    n._badgeWrap = n.querySelector(`[${A}-wait-wrap]`) || n._badge;
+    n._noteLabel = n.querySelector(`[${A}-note-label]`);
+    n._noteIcons = qa(`[${A}-note-icon]`, n).map(el => [el, el.getAttribute(`${A}-note-icon`)]);
+    return n;
+  }
+
+  /* Tische kürzen: Folgenummern → Bereich, max. Blöcke, Rest als +n. */
+  function tables(lbl, max) {
+    const t = String(lbl || '').split('+').map(x => x.trim()).filter(Boolean);
+    if (!t.length) return '';
+    if (t.length === 1) return 'Tisch ' + t[0];
+    const num = x => /^\d+$/.test(x);
+    if (t.every(num)) t.sort((a, b) => a - b);
+    const g = [];
+    t.forEach(x => {
+      const p = g[g.length - 1];
+      if (p && num(x) && num(p.e) && +x === +p.e + 1) { p.e = x; p.n++; } else g.push({ a: x, e: x, n: 1 });
+    });
+    const shown = g.slice(0, max), rest = g.slice(max).reduce((n, x) => n + x.n, 0);
+    return 'Tische ' + shown.map(x => x.a === x.e ? x.a : x.a + '–' + x.e).join(', ') + (rest ? ' +' + rest : '');
+  }
+
+  function values(d) {
+    const r = d.raw, s = d.start;
+    const area = (r.seating_areas && r.seating_areas.name) || '';
+    const changeArea = r.change_seating_area_id
+      ? ((window.tavoStore && window.tavoStore.areaName(r.change_seating_area_id)) || 'Anderer Bereich') : '';
+    const name = r.guest_name || '';
+    return {
+      guest_name: name,
+      table_label: r.table_label || '',
+      table: tables(r.table_label, 2),
+      initials: name.split(/\s+/).slice(0, 2).map(w => w[0] || '').join('').toUpperCase(),
+      party_size: String(r.party_size),
+      time: fmtTime(s),
+      date: fmtDate(s),
+      weekday_short: WD[s.getDay()],
+      weekday: WD_LONG[s.getDay()],
+      party_label: r.party_size + (r.party_size === 1 ? ' Gast' : ' Gäste'),
+      reference: r.reference || '',
+      phone: r.guest_phone || '',
+      email: r.guest_email || '',
+      note: r.note || '',
+      reply: r.reply || '',
+      area,
+      change_note: r.change_note || '',
+      change_area: changeArea,
+      keywords: [name, r.reference, r.guest_phone, r.guest_email, area, r.table_label].filter(Boolean).join(' ')
+    };
+  }
+
+  function updateNode(n, d, L) {
+    const r = d.raw;
+    const waitLabel = d.open && !d.cancelled ? formatDuration(d.wait) : '';
+    const sig = [r.id, r.status, r.reserved_at, r.party_size, r.guest_name, r.note, r.reply,
+      r.reference, r.guest_phone, r.guest_email, r.created_at,
+      r.change_reserved_at, r.change_party_size, r.change_note, r.change_seating_area_id,
+      r.seating_areas && r.seating_areas.name, r.table_label, d.key, waitLabel, L.cancelClass].join('\u0001');
+    if (n._sig === sig) return;
+    n._sig = sig;
+
+    setAttr(n, `${A}-item`, '');
+    setAttr(n, `${A}-id`, r.id);
+    setAttr(n, `${A}-date`, d.key);
+    setAttr(n, `${A}-time`, fmtTime(d.start));
+    setAttr(n, `${A}-guests`, r.party_size);
+    setAttr(n, `${A}-status`, d.status);
+    setAttr(n, `${A}-db-status`, r.status);
+    setAttr(n, `${A}-created`, r.created_at || null);
+    setAttr(n, `${A}-note`, r.note || null);
+    setAttr(n, `${A}-change`, (r.change_reserved_at || r.change_party_size) ? '' : null);
+    setAttr(n, `${A}-area`, (r.seating_areas && r.seating_areas.name) || null);
+    setAttr(n, `${A}-table`, r.table_label || 'none');
+
+    const v = values(d);
+    n._fields.forEach(([el, k, e, m]) => { if (!(k in v)) return; const x = k === 'table' && m !== 2 ? tables(r.table_label, m) : v[k];
+      setText(el, x || e); setAttr(el, `${A}-field-state`, x ? null : 'empty'); });
+    n._wraps.forEach(([el, k]) => { if (k in v) setShow(el, !!v[k]); });
+
+    n.classList.toggle(L.cancelClass, d.cancelled);
+    setAttr(n, `${A}-state`, d.cancelled ? 'cancelled' : d.noshow ? 'noshow' : null);
+    setAttr(n, `${A}-note-cat`, d.noteCat);
+    if (d.noteCat && n._noteLabel) setText(n._noteLabel, NOTE_LABELS[d.noteCat] || NOTE_LABELS.sonstiges);
+    n._noteIcons.forEach(([el, want]) => setShow(el, want === d.noteCat || (!want && !!d.noteCat)));
+
+    if (n._badge) setText(n._badge, waitLabel);
+    if (n._badgeWrap) setShow(n._badgeWrap, !!waitLabel);
+  }
+
+  /* Ziel-Reihenfolge herstellen mit minimalen DOM-Bewegungen. */
+  function reconcile(L) {
+    if (L.from && L.cap) {
+      const w = wall(Date.now()), t = dayKey(w), i = L.from === 'now' ? L.matches.findIndex(d => d.start - w >= -L.grace) : L.matches.findIndex(d => d.key >= t);
+      L.lo = L.from === 'now' && i >= 0 ? i : Math.max(0, Math.min(i < 0 ? L.matches.length : i, L.matches.length - L.cap));
+      L.limit = L.lo + L.cap;
+    }
+    const want = L.matches.slice(L.lo || 0, L.limit > 0 ? L.limit : undefined);
+    const host = L.host;
+    const keep = new Set();
+    let moved = false;
+    const perDay = {};
+    if (L.group) L.matches.forEach(d => {
+      const g = perDay[d.key] || (perDay[d.key] = { n: 0, guests: 0 });
+      if (!d.cancelled) { g.n++; g.guests += d.guests; }
+    });
+    const group = d => {
+      const gk = 'g:' + d.key;
+      let g = L.groups.get(gk);
+      if (!g) { g = groupNode(L.group); g._gid = gk; L.groups.set(gk, g); }
+      const c = perDay[d.key], box = L.group === 'box';
+      const short = dayLabel(d.day), rel = ['Heute', 'Morgen', 'Gestern'].includes(short);
+      if (g._label) setText(g._label, !box ? short : rel ? `${short}, ${dayLong(d.day).split(', ')[1]}` : dayLong(d.day));
+      if (g._meta) setText(g._meta, !c.n ? 'Nur Absagen' : box ? plural(c.guests, 'Gast', 'Gäste')
+        : plural(c.n, 'Reservierung', 'Reservierungen') + ' · ' + plural(c.guests, 'Gast', 'Gäste'));
+      setAttr(g, `${A}-group-date`, d.key);
+      setAttr(g, `${A}-group-count`, c.n);
+      setAttr(g, `${A}-group-guests`, c.guests);
+      keep.add(gk);
+      return g;
+    };
+    const item = d => {
+      let n = L.nodes.get(d.id);
+      if (!n) { n = buildNode(L); n._id = d.id; L.nodes.set(d.id, n); }
+      updateNode(n, d, L);
+      keep.add(d.id);
+      return n;
+    };
+    const sync = (parent, nodes) => {
+      let ref = parent.firstChild;
+      for (const n of nodes) {
+        if (n === ref) ref = ref.nextSibling;
+        else { parent.insertBefore(n, ref); moved = true; }
+      }
+      while (ref) { const next = ref.nextSibling; parent.removeChild(ref); ref = next; moved = true; }
+    };
+    if (L.group === 'box') {
+      const runs = [];
+      for (const d of want) {
+        if (!runs.length || runs[runs.length - 1].key !== d.key) runs.push({ key: d.key, g: group(d), items: [] });
+        runs[runs.length - 1].items.push(item(d));
+      }
+      sync(host, runs.map(r => r.g));
+      runs.forEach(r => sync(r.g._box, r.items));
+    } else {
+      const top = [];
+      let day = null;
+      for (const d of want) {
+        if (L.group && d.key !== day) { day = d.key; top.push(group(d)); }
+        top.push(item(d));
+      }
+      sync(host, top);
+    }
+    for (const id of L.nodes.keys()) if (!keep.has(id)) L.nodes.delete(id);
+    for (const id of L.groups.keys()) if (!keep.has(id)) L.groups.delete(id);
+    host.setAttribute(`${A}-total`, L.matches.length);
+    host.setAttribute(`${A}-rendered`, want.length);
+    if (L.sentinel) setShow(L.sentinel, L.limit > 0 && L.limit < L.matches.length);
+    return moved;
+  }
+
+  /* ══ Hauptlauf ═════════════════════════════════════════════════ */
+  function compute() {
+    CONF = readConfig();
+    const nowMs = Date.now();
+    const now = wall(nowMs);
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrowStart = new Date(todayStart); tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+    const weekEnd = new Date(todayStart); weekEnd.setDate(weekEnd.getDate() + 6);
+    const closures = readClosures();
+    const ctx = { now, todayStart, tomorrowStart, weekEnd,
+      todayKey: dayKey(todayStart), tomorrowKey: dayKey(tomorrowStart) };
+
+    const all = (window.tavoStore ? window.tavoStore.all() : []).map(r => derive(r, nowMs));
+    all.sort((a, b) => a.start - b.start);   // einmal sortieren, Listen erben die Ordnung
+
+    if (!ACTIVE && LISTS.length) ACTIVE = LISTS[0].key;
+    let nextGlobal = null;
+    for (const r of all) if (!r.cancelled && r.start >= now) { nextGlobal = r; break; }
+
+    STATS = {};
+    LISTS.forEach(L => {
+      if (L.idle) { L.matches = []; return; }
+      const cat = L.cat;
+      const lctx = Object.assign({}, ctx, { groupSize: L.groupSize });
+      const hits = all.filter(r => {
+        if (!cat.match(r, lctx)) return false;
+        if (r.cancelled && !cat.cancelled) return false;
+        if (L.windowDays > 0 && Math.abs(r.day - todayStart) / 86400000 > L.windowDays) return false;
+        return true;
+      });
+      const dir = L.sort || cat.sort;
+      L.matches = dir === 'desc' ? hits.slice().reverse() : hits;
+      if (L.noCx) L.matches = L.matches.filter(r => !r.cancelled);
+      if (L.inSheet) return;   // Sheet-Liste schreibt keine STATS
+
+      const live = hits.filter(r => !r.cancelled);          // bereits aufsteigend
+      const asc = live;
+      const upcoming = asc.filter(r => r.start.getTime() + L.grace >= now.getTime());
+      const nextUp = upcoming[0] || null;
+      const openRows = live.filter(r => r.open);
+      const cancelled = hits.filter(r => r.cancelled);
+      const noshows = hits.filter(r => r.noshow);
+      let longest = null;
+      for (const r of openRows) if (r.wait != null && (!longest || r.wait > longest.wait)) longest = r;
+      const sum = (arr, p) => arr.reduce((n, r) => n + r[p], 0);
+
+      const byDay = {};
+      live.forEach(r => { byDay[r.key] = (byDay[r.key] || 0) + r.guests; });
+      const dayKeys = Object.keys(byDay).sort((a,b) => byDay[b] - byDay[a]);
+      const busiestKey = dayKeys[0];
+      const busiestRow = busiestKey ? live.find(r => r.key === busiestKey) : null;
+
+      const seats = busiestKey ? byDay[busiestKey] : 0;
+      const capacity = CONF.capacity;
+      const occupancy = capacity ? Math.round(seats / capacity * 100) : '';
+
+      const byHour = {};
+      live.forEach(r => { const h = r.start.getHours(); byHour[h] = (byHour[h] || 0) + r.guests; });
+      const hours = Object.keys(byHour).map(Number).sort((a,b) => byHour[b] - byHour[a]);
+      const peakHour = hours.length ? hours[0] : null;
+
+      const refDay = L.key === 'morgen' ? tomorrowStart : todayStart;
+      const closedLabel = (L.key === 'heute' || L.key === 'morgen') ? closureFor(refDay, closures) : null;
+
+      STATS[L.key] = {
+        empty: live.length === 0,
+        closed: !!closedLabel,
+        byHour, peakHour,
+        slotCount: Object.keys(byHour).length,
+        hasNext: !!nextUp,
+        tokens: {
+          count: live.length,
+          bookings: live.length,
+          guests: sum(live,'guests'),
+          open: openRows.length,
+          openGuests: sum(openRows,'guests'),
+          notes: live.filter(r => r.note).length || '',
+          cancelled: cancelled.length,
+          cancelledLabel: cancelled.length ? plural(cancelled.length,'Absage','Absagen') : '',
+          noshow: noshows.length,
+          noshowLabel: noshows.length ? plural(noshows.length,'No-Show','No-Shows') : '',
+          wait: longest ? formatDuration(longest.wait) : '',
+          next: nextUp ? fmtShort(nextUp.start) : '',
+          nextTime: nextUp ? fmtTime(nextUp.start) : '',
+          nextIn: nextUp && nextUp.start > now ? `in ${formatDuration(nextUp.start - now)}` : '',
+          remaining: upcoming.length || '',
+          done: (live.length - upcoming.length) || '',
+          allDone: live.length && !upcoming.length ? '1' : '',
+          first: asc.length ? fmtShort(asc[0].start) : '',
+          firstTime: asc.length ? fmtTime(asc[0].start) : '',
+          last: asc.length ? fmtShort(asc[asc.length-1].start) : '',
+          lastTime: asc.length ? fmtTime(asc[asc.length-1].start) : '',
+          nextGlobal: nextGlobal ? fmtShort(nextGlobal.start) : '',
+          nextGlobalTime: nextGlobal ? fmtTime(nextGlobal.start) : '',
+          nextGlobalGuests: nextGlobal ? nextGlobal.guests : '',
+          today: fmtLong(todayStart),
+          tomorrow: fmtLong(tomorrowStart),
+          weekEnd: fmtShort(weekEnd),
+          days: dayKeys.length || '',
+          busiest: busiestRow ? fmtShort(busiestRow.start) : '',
+          busiestGuests: busiestKey ? byDay[busiestKey] : '',
+          maxGuests: live.reduce((n,r) => Math.max(n, r.guests), 0) || '',
+          groupSize: L.groupSize,
+          capacity: capacity || '',
+          seats: seats || 0,
+          seatsFree: capacity ? capacity - seats : '',
+          occupancy,
+          peakTime: peakHour == null ? '' : `${pad(peakHour)}:00`,
+          peakGuests: peakHour == null ? '' : byHour[peakHour],
+          closedLabel: closedLabel || '',
+          range: asc.length
+            ? `${pad(asc[0].start.getDate())}.${pad(asc[0].start.getMonth()+1)}. – ` +
+              `${fmtLong(asc[asc.length-1].start).replace(/^\w{2}, /,'')}` : ''
+        }
+      };
+    });
+  }
+
+  function reindexSearch(changed) {
+    LISTS.forEach(L => {
+      const root = L.search;
+      if (!root || !root._liveSearch || !changed.has(L)) return;
+      try {
+        root._liveSearch.reIndex();
+        if (root._liveSearchRender) root._liveSearchRender();
+      } catch (e) { console.warn('[tavo] Suche neu indizieren:', e); }
+    });
+  }
+
+  let started = false;
+  function render() {
+    if (!started) return;
+    compute();
+    const changed = new Set(LISTS.filter(reconcile));
+    reindexSearch(changed);
+    paint();
+    document.dispatchEvent(new CustomEvent('tavo:rendered'));
+  }
+
+  /* Sheet-Liste auf eine Kategorie umstellen ('' = schlafen legen). */
+  function switchList(L, key, src) {
+    if (!L) return;
+    L.key = key || ''; L.cat = CATS[L.key] || CATS.alle; L.idle = !key;
+    if (src) ['sort','windowDays','groupSize','grace','cancelClass'].forEach(k => { L[k] = src[k]; });
+    L.group = L.ownGroup || (src ? src.group : '');
+    L.limit = L.pageSize; L.lo = 0; L.nodes.clear(); L.groups.clear(); L.host.textContent = '';
+    L.host.setAttribute(`${A}-list`, L.key);
+    render();
+  }
+
+  /* ══ Ausgabe (wie v3, nur ohne überflüssige Schreibzugriffe) ═══ */
+  const REVEALED = new WeakSet();
+  let barObserver = null;
+  function setBar(node, prop, value, delay) {
+    if (!node) return;
+    node._tavoTarget = { prop, value };
+    if (delay) node.style.transitionDelay = delay + 'ms';
+    const other = prop === 'height' ? 'width' : 'height';
+    if (node.style[other]) node.style[other] = '';
+    const v = REVEALED.has(node) ? value : (prop === 'height' ? '0px' : '0%');
+    if (node.style[prop] !== v) node.style[prop] = v;
+  }
+  function revealAll(container) {
+    qa(`[${A}-peak-bar], [${A}-bar]`, container).forEach(b => {
+      REVEALED.add(b);
+      b.classList.add('is-in-view');
+      if (b._tavoTarget) b.style[b._tavoTarget.prop] = b._tavoTarget.value;
+    });
+  }
+  function revealBars(container) {
+    if (!container) return;
+    if (container.hasAttribute(`${A}-no-reveal`) || !('IntersectionObserver' in window)) { revealAll(container); return; }
+    if (container._tavoRevealed) { revealAll(container); return; }
+    if (container._tavoWatched) return;
+    container._tavoWatched = true;
+    if (!barObserver) {
+      barObserver = new IntersectionObserver(entries => {
+        entries.forEach(e => {
+          if (!e.isIntersecting) return;
+          e.target.classList.add('is-in-view');
+          e.target._tavoRevealed = true;
+          revealAll(e.target);
+          barObserver.unobserve(e.target);
+        });
+      }, { threshold: 0.25 });
+    }
+    barObserver.observe(container);
+  }
+
+  const axisCache = new WeakMap();
+  function axisOf(el) {
+    const a = (el.getAttribute(`${A}-peak-axis`) || '').trim();
+    if (a === 'x' || a === 'y') return a;
+    if (!axisCache.has(el)) {
+      const dir = getComputedStyle(el).flexDirection || 'row';
+      axisCache.set(el, dir.indexOf('column') === 0 ? 'x' : 'y');
+    }
+    return axisCache.get(el);
+  }
+
+  function paint() {
+    const conf = CONF || readConfig();
+
+    qa(`[${A}-count]`).forEach(el => {
+      const key = keyOf(el, `${A}-count`); const s = STATS[key]; if (!s) return;
+      setText(el, cfgAttr(el, key, 'count-mode') === 'guests' ? s.tokens.guests : s.tokens.bookings);
+    });
+
+    qa(`[${A}-kicker]`).forEach(el => {
+      const key = keyOf(el, `${A}-kicker`); if (!STATS[key]) return;
+      const alt = cfgAttr(el, key, 'count-mode') === 'guests' ? cfgAttr(el, key, 'kicker-guests') : null;
+      const txt = alt || cfgAttr(el, key, 'kicker-text') || (DEFAULTS[key] && DEFAULTS[key].kicker);
+      if (txt) setText(el, txt);
+    });
+
+    qa(`[${A}-sub]`).forEach(el => {
+      const key = keyOf(el, `${A}-sub`); const s = STATS[key]; if (!s) return;
+      const def = DEFAULTS[key] || {};
+      let tpl;
+      if (s.empty && s.closed) tpl = cfgAttr(el, key, 'sub-closed') ?? def.subClosed ?? def.subEmpty;
+      else if (s.empty)        tpl = cfgAttr(el, key, 'sub-empty') ?? def.subEmpty;
+      else                     tpl = cfgAttr(el, key, 'sub-template') ?? def.sub;
+      setText(el, fill(tpl, s.tokens) || cfgAttr(el, key, 'sub-fallback') || def.subFallback || FALLBACK);
+    });
+
+    qa(`[${A}-pill]`).forEach(el => {
+      const key = keyOf(el, `${A}-pill`); const s = STATS[key]; if (!s) return;
+      const def = DEFAULTS[key] || {};
+      const tpl = s.empty ? (cfgAttr(el,key,'pill-empty') ?? def.pillEmpty)
+                          : (cfgAttr(el,key,'pill-template') ?? def.pill);
+      const txt = fill(tpl, s.tokens) || cfgAttr(el,key,'pill-fallback') || def.pillFallback || '';
+      setText(el, txt);
+      const wrap = el.closest(`[${A}-pill-wrap]`);
+      if (wrap) setShow(wrap, !!txt);
+    });
+
+    qa(`[${A}-value]`).forEach(el => {
+      const token = (el.getAttribute(`${A}-value`) || '').trim();
+      if (!token) return;
+      const key = (el.getAttribute(`${A}-value-key`) || '').trim() || keyOf(el, `${A}-value`);
+      const s = STATS[key]; if (!s) return;
+      const v = s.tokens[token];
+      const empty = el.getAttribute(`${A}-value-empty`);
+      setText(el, (v === '' || v == null) ? (empty != null ? empty : '') : String(v));
+      setAttr(el, `${A}-value-state`, (v === '' || v == null || v === 0) ? 'empty' : 'set');
+    });
+
+    qa(`[${A}-text]`).forEach(el => {
+      const tpl = el.getAttribute(`${A}-text`);
+      if (!tpl) return;
+      const key = (el.getAttribute(`${A}-text-key`) || '').trim() || keyOf(el, `${A}-text`);
+      const s = STATS[key]; if (!s) return;
+      setText(el, fill(tpl, s.tokens) || el.getAttribute(`${A}-text-empty`) || '');
+    });
+
+    qa(`[${A}-occupancy]`).forEach(el => {
+      const key = keyOf(el, `${A}-occupancy`); const s = STATS[key]; if (!s) return;
+      const pct = s.tokens.occupancy === '' ? 0 : s.tokens.occupancy;
+      const bar = el.querySelector(`[${A}-bar]`);
+      if (bar) setBar(bar, 'width', Math.max(0, Math.min(100, pct)) + '%');
+      revealBars(el);
+      const state = pct >= 90 ? 'voll' : pct >= 60 ? 'hoch' : 'normal';
+      setAttr(el, `${A}-occupancy-state`, state);
+      const OCLS = {
+        voll:   el.getAttribute(`${A}-class-voll`)   || 'is-voll',
+        hoch:   el.getAttribute(`${A}-class-hoch`)   || 'is-hoch',
+        normal: el.getAttribute(`${A}-class-normal`) || 'is-normal'
+      };
+      [el, bar].forEach(n => {
+        if (!n) return;
+        Object.keys(OCLS).forEach(k => n.classList.toggle(OCLS[k], k === state));
+      });
+    });
+
+    qa(`[${A}-peak]`).forEach(el => {
+      const key = keyOf(el, `${A}-peak`); const s = STATS[key]; if (!s) return;
+      const maxH = parseInt(el.getAttribute(`${A}-peak-max`), 10) || 46;
+      const tpl = el._tavoPeakTpl || el.querySelector(`[${A}-peak-template]`);
+
+      let buckets;
+      if (tpl) {
+        el._tavoPeakTpl = tpl;
+        const maxSlots = parseInt(el.getAttribute(`${A}-peak-max-slots`), 10) || 6;
+        const from = conf.serviceStart != null ? conf.serviceStart : 17;
+        const to = conf.serviceEnd != null ? conf.serviceEnd : 22;
+        const span = Math.max(1, to - from);
+        const step = Math.max(1, Math.ceil(span / maxSlots));
+        buckets = [];
+        for (let h = from; h < to; h += step) {
+          let g = 0, peak = false;
+          for (let k = h; k < Math.min(h + step, to); k++) {
+            g += s.byHour[k] || 0;
+            if (k === s.peakHour) peak = true;
+          }
+          buckets.push({ from: h, to: Math.min(h + step, to), guests: g, peak, label: pad(h) });
+        }
+        // Klone nur neu bauen, wenn sich die Anzahl ändert.
+        const host = tpl.parentNode;
+        let clones = (el._tavoPeakClones || []).filter(n => n.isConnected);
+        if (clones.length !== buckets.length) {
+          clones.forEach(n => n.remove());
+          qa(`[${A}-peak-slot]`, el).forEach(n => { if (n !== tpl) n.remove(); });
+          tpl.style.display = 'none';
+          clones = buckets.map(() => {
+            const node = tpl.cloneNode(true);
+            node.removeAttribute(`${A}-peak-template`);
+            node.style.display = '';
+            host.appendChild(node);
+            return node;
+          });
+          el._tavoPeakClones = clones;
+        }
+        buckets.forEach((b, i) => { b.node = clones[i]; });
+      } else {
+        buckets = qa(`[${A}-peak-slot]`, el).map(slot => {
+          const h = parseInt(slot.getAttribute(`${A}-peak-slot`), 10);
+          return { from: h, to: h + 1, guests: s.byHour[h] || 0, peak: h === s.peakHour, node: slot, label: pad(h) };
+        });
+      }
+
+      const top = buckets.reduce((n, b) => Math.max(n, b.guests), 0) || 1;
+      const CLS = {
+        peak:   el.getAttribute(`${A}-peak-class-peak`)   || 'is-peak',
+        normal: el.getAttribute(`${A}-peak-class-normal`) || 'is-normal',
+        empty:  el.getAttribute(`${A}-peak-class-empty`)  || 'is-empty',
+        hover:  el.getAttribute(`${A}-peak-class-hover`)  || 'is-hover'
+      };
+      const axis = axisOf(el);
+      setAttr(el, `${A}-peak-axis-state`, axis);
+      const stagger = parseInt(el.getAttribute(`${A}-peak-stagger`), 10) || 0;
+
+      buckets.forEach((b, i) => {
+        if (!b.node) return;
+        const bar = b.node.querySelector(`[${A}-peak-bar]`);
+        const cnt = b.node.querySelector(`[${A}-peak-count]`);
+        const lab = b.node.querySelector(`[${A}-peak-label]`);
+        if (bar) {
+          const delay = stagger ? i * stagger : 0;
+          if (axis === 'y') setBar(bar, 'height', (b.guests ? Math.max(4, Math.round(maxH * b.guests / top)) : 4) + 'px', delay);
+          else setBar(bar, 'width', (b.guests ? Math.max(4, Math.round(100 * b.guests / top)) : 4) + '%', delay);
+        }
+        if (cnt) setText(cnt, b.guests || '');
+        if (lab) setText(lab, b.label);
+        setAttr(b.node, `${A}-peak-slot`, b.from);
+        const state = b.guests === 0 ? 'empty' : (b.peak ? 'peak' : 'normal');
+        setAttr(b.node, `${A}-slot-state`, state);
+        [b.node, bar, cnt, lab].forEach(n => {
+          if (!n) return;
+          ['peak','normal','empty'].forEach(k => n.classList.toggle(CLS[k], k === state));
+        });
+
+        const wrap = b.node.querySelector(`[${A}-peak-count-wrap]`);
+        if (wrap && !b.node.__peakBound) {
+          b.node.__peakBound = true;
+          const node = b.node;
+          const on = () => {
+            qa(`[${A}-peak-slot]`, el).forEach(n => n.classList.remove(CLS.hover));
+            node.classList.add(CLS.hover);
+          };
+          node.addEventListener('mouseenter', on);
+          node.addEventListener('mouseleave', () => node.classList.remove(CLS.hover));
+          node.addEventListener('touchstart', on, { passive: true });
+        }
+      });
+      if (!el._tavoOutsideBound) {
+        // EIN document-Listener pro Chart statt einer pro Balken.
+        el._tavoOutsideBound = true;
+        document.addEventListener('touchstart', e => {
+          if (!el.contains(e.target)) qa(`[${A}-peak-slot]`, el).forEach(n => n.classList.remove(CLS.hover));
+        }, { passive: true });
+      }
+
+      revealBars(el);
+
+      if (el.hasAttribute(`${A}-peak-thin-labels`)) {
+        buckets.forEach((b, i) => {
+          const lab = b.node && b.node.querySelector(`[${A}-peak-label]`);
+          if (!lab) return;
+          const keep = i === 0 || i === buckets.length - 1 || b.peak;
+          const v = keep ? '' : 'hidden';
+          if (lab.style.visibility !== v) lab.style.visibility = v;
+        });
+      }
+    });
+
+    qa(`[${A}-card]`).forEach(el => {
+      const s = STATS[keyOf(el, `${A}-card`)];
+      if (s) setShow(el, !s.empty);
+    });
+    qa(`[${A}-empty]`).forEach(el => {
+      if (el.dataset.resEmptyHidden) return;   // Ladezustand hält es noch zurück
+      const s = STATS[keyOf(el, `${A}-empty`)];
+      if (s) setShow(el, s.empty);
+    });
+
+    qa(`[${A}-block]`).forEach(el => {
+      const key = keyOf(el, `${A}-block`); const s = STATS[key]; if (!s) return;
+      const min = parseInt(el.getAttribute(`${A}-min-bookings`), 10) || 0;
+      const req = (el.getAttribute(`${A}-require`) || '').split(',').map(x => x.trim()).filter(Boolean);
+      let show = s.tokens.bookings >= min;
+      req.forEach(r => {
+        if (r === 'notes')    show = show && !!s.tokens.notes;
+        if (r === 'peak')     show = show && s.slotCount >= 2;
+        if (r === 'next')     show = show && s.hasNext;
+        if (r === 'capacity') show = show && !!conf.capacity;
+      });
+      setShow(el, show);
+    });
+
+    qa(`[${A}-tab]`).forEach(el => {
+      if (!el.hasAttribute(`${A}-tab-hide-empty`)) return;
+      const s = STATS[el.getAttribute(`${A}-tab`)];
+      if (s) setShow(el, !s.empty);
+    });
+  }
+
+  function setActive(key) { if (!key || key === ACTIVE) return; ACTIVE = key; paint(); }
+
+  function suggestStart() {
+    if (STATS.offen && !STATS.offen.empty) return 'offen';
+    if (STATS.heute && !STATS.heute.empty) return 'heute';
+    return 'morgen' in STATS ? 'morgen' : Object.keys(STATS)[0];
+  }
+
+  /* Detail-Sheet in Restaurantzeit: eigenes Embed (seit v4.7). */
+
+  /* ── Start ───────────────────────────────────────────────── */
+  let queued = false;
+  let fromData = false;
+  function schedule(e) {
+    if (e && e.type === 'tavo:data') fromData = true;
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      render();
+      const announce = fromData;
+      fromData = false;
+      if (announce && window.tavoStore && window.tavoStore.ready) {
+        const rows = window.tavoStore.all();
+        document.dispatchEvent(new CustomEvent('tavo:hydrated', { detail: { count: rows.length, rows } }));
+      }
+    });
+  }
+  document.addEventListener('tavo:data', schedule);
+
+  function boot() {
+    CONF = readConfig();
+    if (!setupProto()) return;
+    setupLists();
+    started = true;
+
+    const host = document.querySelector(`[${A}-current]`);
+    if (host) {
+      new MutationObserver(() => setActive(host.getAttribute(`${A}-current`)))
+        .observe(host, { attributes: true, attributeFilter: [`${A}-current`] });
+    }
+
+    // Nur echte Breitenänderungen — die Adressleiste auf dem Handy
+    // ändert nur die Höhe und feuert trotzdem resize.
+    let lastW = window.innerWidth, rt;
+    window.addEventListener('resize', () => {
+      if (window.innerWidth === lastW) return;
+      lastW = window.innerWidth;
+      clearTimeout(rt);
+      rt = setTimeout(() => { qa(`[${A}-peak]`).forEach(el => axisCache.delete(el)); paint(); }, 150);
+    }, { passive: true });
+
+    // Minutentakt: Wartezeiten, "nächste um", Tageswechsel.
+    // Dank Diff werden nur Zeilen angefasst, deren Text sich ändert.
+    let stamp = dayKey(wall(Date.now()));
+    setInterval(() => {
+      if (document.hidden) return;
+      const k = dayKey(wall(Date.now()));
+      const rolled = k !== stamp;
+      stamp = k;
+      render();
+      if (rolled) document.dispatchEvent(new CustomEvent('tavo:daychange'));
+    }, 60000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) schedule(); });
+
+    window.tavoReservierungen = {
+      refresh: () => schedule(),
+      setActive, suggestStart, classifyNote,
+      rescan() { setupLists(); schedule(); },
+      get active() { return ACTIVE; },
+      get stats() { return STATS; },
+      lists: () => LISTS.slice(), switchList, defaults: DEFAULTS, dayLong,
+      version: 4.9,
+      // Bausteine für Zusatzmodule (z. B. die Suche)
+      kit: { derive, buildNode, updateNode, reconcile, attachSentinel, wall, fmtDate, fmtTime, dayKey,
+             WD_LONG, get conf() { return CONF || readConfig(); } }
+    };
+    document.dispatchEvent(new CustomEvent('tavo:ready'));
+    if (window.tavoStore && window.tavoStore.ready) schedule({ type: 'tavo:data' });
+    else render();   // leerer Zustand, bis Daten da sind
+  }
+
+  document.readyState === 'loading'
+    ? document.addEventListener('DOMContentLoaded', boot)
+    : boot();
+})();
+</script>
+

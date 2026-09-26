@@ -1,0 +1,534 @@
+<script>
+  /* ============================================================
+   tavo — Detail-Sheet
+   Verbindet den Klick auf eine Reservierung mit dem Bottom-Sheet.
+
+   ── Felder: <div data-detail="FELD"></div>
+     guest_name · initials · reference · weekday · weekday_short
+     date · time · party_size · party_label · area · phone · email
+     note · reply · status · status_label · status_line · status_time
+     wait · newsletter / newsletter_label / newsletter_yes
+     source · source_label  (Telefon, Walk-in, E-Mail, Instagram, Sonstige, Online)
+     salutation · salutation_label  (Frau, Herr, Divers, Familie)
+     change_date / change_time / change_party / change_note
+     change_new_date · change_new_time ·
+       change_requested_party_size · change_requested_seating_area
+       (nur befüllt, wenn der Gast genau diesen Wert geändert hat —
+       sonst leer, Zeile blendet sich aus)
+     change_reserved_at  (Datum + Uhrzeit kombiniert, Altlast)
+     created_date / _time / _at / _rel  (ebenso updated, decided,
+       change_requested, change_decided)
+
+   ── Attribute
+     data-detail-keep · data-detail-wrap="note" · data-detail-show-if="a|b"
+     data-detail-if="feld" · data-detail-if-not="feld"
+     data-detail-text="{a}, {b}" · data-detail-action="confirmed"
+       (auch: change_accepted / change_declined für Änderungswünsche)
+     data-detail-if-newsletter · data-detail-status · data-detail-newsletter
+     data-detail-show-source="walk-in|telefon"  nur bei diesen Quellen sichtbar
+     data-detail-source (am Sheet, zum Stylen: z. B. [data-detail-source="walk-in"])
+
+   ── Sitzbereich
+     <div data-detail-area-list><div data-detail-area-option></div></div>
+
+   v5: Aktionen mit Rückgängig (Status-Chip v3.3, deferred).
+   v4: Das offene Sheet folgt jetzt Live-Änderungen (Realtime) statt
+   sich zu schließen, sobald die Zeile nicht im DOM steht — mit
+   seitenweisem Rendern ist nicht jede Zeile im DOM.
+   ============================================================ */
+
+(function () {
+  'use strict';
+
+  var SHEET = 'reservierung';
+  var current = null;
+  var areaListBuilt = false;
+
+  var STATUS_LABEL = {
+    pending:          'Offen',
+    confirmed:        'Bestätigt',
+    declined:         'Abgelehnt',
+    change_requested: 'Änderungswunsch',
+    cancelled:        'Storniert'
+  };
+
+  var SOURCE_LABEL = {
+    website:   'Online',
+    telefon:   'Telefon',
+    'walk-in': 'Walk-in',
+    email:     'E-Mail',
+    instagram: 'Instagram',
+    sonstige:  'Sonstige'
+  };
+  var SALUTATION_LABEL = { frau: 'Frau', herr: 'Herr', divers: 'Divers', familie: 'Familie' };
+
+  var WD      = ['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag'];
+  var WD_KURZ = ['So','Mo','Di','Mi','Do','Fr','Sa'];
+  var pad = function (n) { return String(n).padStart(2, '0'); };
+
+  function initialen(name) {
+    return (name || '').split(/\s+/).slice(0, 2)
+      .map(function (w) { return w[0] || ''; }).join('').toUpperCase();
+  }
+
+  function waitLabel(iso) {
+    if (!iso) return '';
+    var m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (m < 60) return 'seit ' + Math.max(m, 1) + ' Min';
+    var h = Math.floor(m / 60);
+    if (h < 24) return 'seit ' + h + ' Std';
+    var d = Math.floor(h / 24);
+    return 'seit ' + d + (d === 1 ? ' Tag' : ' Tagen');
+  }
+
+  function relativ(d) {
+    var m = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (m < 1)  return 'gerade eben';
+    if (m < 60) return 'vor ' + m + ' Min';
+    var h = Math.floor(m / 60);
+    if (h < 24) return 'vor ' + h + ' Std';
+    var t = Math.floor(h / 24);
+    if (t < 31) return 'vor ' + t + (t === 1 ? ' Tag' : ' Tagen');
+    return '';
+  }
+
+  function stamp(ziel, prefix, iso) {
+    if (!iso) {
+      ziel[prefix + '_date'] = ''; ziel[prefix + '_time'] = '';
+      ziel[prefix + '_at'] = '';   ziel[prefix + '_rel'] = '';
+      return;
+    }
+    var d = new Date(iso);
+    if (isNaN(d)) { stamp(ziel, prefix, null); return; }
+    var datum = pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear();
+    var zeit  = pad(d.getHours()) + ':' + pad(d.getMinutes());
+    ziel[prefix + '_date'] = datum;
+    ziel[prefix + '_time'] = zeit;
+    ziel[prefix + '_at']   = datum + ', ' + zeit + ' Uhr';
+    ziel[prefix + '_rel']  = relativ(d);
+  }
+
+  var STATUS_STAMP = {
+    pending:          ['created_at',          'Ausstehend seit '],
+    change_requested: ['change_requested_at', 'Änderungswunsch seit '],
+    confirmed:        ['decided_at',          'Bestätigt am '],
+    declined:         ['decided_at',          'Abgelehnt am '],
+    cancelled:        ['decided_at',          'Storniert am ']
+  };
+
+  /* ── Änderungswunsch ────────────────────────────────────────
+     Leerer String = Feld ausblenden. Alles in Restaurantzeit
+     (tavoWall). Datum und Uhrzeit werden getrennt verglichen.   */
+  function aenderungsWunsch(r) {
+    var wand = window.tavoWall || function (iso) { return new Date(iso); };
+    var out = { termin: '', datum: '', uhrzeit: '', gaeste: '', bereich: '' };
+
+    if (r.change_reserved_at && Date.parse(r.change_reserved_at) !== Date.parse(r.reserved_at)) {
+      var neu = wand(r.change_reserved_at);
+      var alt = wand(r.reserved_at);
+      var zeit = pad(neu.getHours()) + ':' + pad(neu.getMinutes()) + ' Uhr';
+      var selberTag = neu.getFullYear() === alt.getFullYear()
+        && neu.getMonth() === alt.getMonth() && neu.getDate() === alt.getDate();
+      var selbeZeit = neu.getHours() === alt.getHours() && neu.getMinutes() === alt.getMinutes();
+      out.termin = selberTag ? zeit
+        : WD_KURZ[neu.getDay()] + ', ' + pad(neu.getDate()) + '.' + pad(neu.getMonth() + 1) + '. · ' + zeit;
+      if (!selberTag) {
+        out.datum = WD_KURZ[neu.getDay()] + ', ' + pad(neu.getDate()) + '.'
+          + pad(neu.getMonth() + 1) + '.' + neu.getFullYear();
+      }
+      if (!selbeZeit) out.uhrzeit = zeit;
+    }
+
+    var n = parseInt(r.change_party_size, 10);
+    if (n && n !== parseInt(r.party_size, 10)) {
+      out.gaeste = n + (n === 1 ? ' Gast' : ' Gäste');
+    }
+
+    var bereichId = r.change_seating_area_id;
+    if (bereichId && bereichId !== r.seating_area_id) {
+      out.bereich = (window.tavoStore && window.tavoStore.areaName && window.tavoStore.areaName(bereichId))
+        || 'Anderer Bereich';
+    }
+    return out;
+  }
+
+  function tokens(r) {
+    var d  = new Date(r.reserved_at);
+    var cd = r.change_reserved_at ? new Date(r.change_reserved_at) : null;
+
+    var o = {
+      guest_name:    r.guest_name || '',
+      table_label:   r.table_label || '',
+      initials:      initialen(r.guest_name),
+      reference:     r.reference || '',
+      weekday:       WD[d.getDay()],
+      weekday_short: WD_KURZ[d.getDay()],
+      date:          pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear(),
+      time:          pad(d.getHours()) + ':' + pad(d.getMinutes()),
+      party_size:    String(r.party_size),
+      party_label:   r.party_size + (r.party_size === 1 ? ' Gast' : ' Gäste'),
+      area:          (r.seating_areas && r.seating_areas.name) || '',
+      phone:         r.guest_phone || '',
+      email:         r.guest_email || '',
+      note:          r.note || '',
+      reply:         r.reply || '',
+      newsletter:       r.newsletter ? 'Ja' : 'Nein',
+      newsletter_label: r.newsletter ? 'Newsletter abonniert' : 'Kein Newsletter',
+      newsletter_yes:   r.newsletter ? 'Ja' : '',
+      newsletter_state: r.newsletter ? 'an' : 'aus',
+      source:        r.source || '',
+      source_label:  r.source ? (SOURCE_LABEL[r.source] || r.source) : '',
+      salutation:    r.guest_salutation || '',
+      salutation_label: SALUTATION_LABEL[r.guest_salutation] || '',
+      status:        r.status,
+      status_label:  STATUS_LABEL[r.status] || r.status,
+      wait:          (r.status === 'pending' || r.status === 'change_requested')
+                       ? waitLabel(r.created_at) : '',
+      change_date:   cd ? pad(cd.getDate()) + '.' + pad(cd.getMonth() + 1) + '.' + cd.getFullYear() : '',
+      change_time:   cd ? pad(cd.getHours()) + ':' + pad(cd.getMinutes()) : '',
+      change_party:  r.change_party_size ? String(r.change_party_size) : '',
+      change_note:   r.change_note || ''
+    };
+
+    // Wochentag in Restaurantzeit (Datum/Uhrzeit korrigiert tavoFixSheetTime)
+    if (window.tavoWall) {
+      var w = window.tavoWall(r.reserved_at);
+      o.weekday = WD[w.getDay()];
+      o.weekday_short = WD_KURZ[w.getDay()];
+    }
+
+    // Änderungswunsch des Gastes: nur Felder mit Inhalt, und nur wenn
+    // sie sich von der bestehenden Reservierung unterscheiden.
+    var wunsch = aenderungsWunsch(r);
+    o.change_reserved_at            = wunsch.termin;
+    o.change_new_date               = wunsch.datum;
+    o.change_new_time               = wunsch.uhrzeit;
+    o.change_requested_party_size   = wunsch.gaeste;
+    o.change_requested_seating_area = wunsch.bereich;
+
+    stamp(o, 'created',          r.created_at);
+    stamp(o, 'updated',          r.updated_at);
+    stamp(o, 'decided',          r.decided_at);
+    stamp(o, 'change_requested', r.change_requested_at);
+    stamp(o, 'change_decided',   r.change_decided_at);
+
+    var regel = STATUS_STAMP[r.status];
+    if (regel) {
+      var relativZeigen = (r.status === 'pending' || r.status === 'change_requested');
+      var basis = relativZeigen
+        ? (o[regel[0].replace('_at', '_rel')] || '').replace(/^vor /, '')
+        : o[regel[0]];
+      o.status_time = basis || '';
+      o.status_line = basis ? regel[1] + basis : o.status_label;
+    } else {
+      o.status_time = '';
+      o.status_line = o.status_label;
+    }
+    return o;
+  }
+
+  function sheetEl() {
+    return document.querySelector('[data-sheet="' + SHEET + '"]');
+  }
+
+  /* ── Sitzbereich-Liste (einmalig aufgebaut) ─────────────── */
+  async function areaListeAufbauen() {
+    var root = sheetEl();
+    if (!root) return;
+    var host = root.querySelector('[data-detail-area-list]');
+    if (!host || areaListBuilt) return;
+    var vorlage = host.querySelector('[data-detail-area-option]');
+    if (!vorlage) return console.warn('[tavo] [data-detail-area-option] fehlt');
+
+    var db = window.tavoDB;
+    if (!db) return;
+    var rid = window.tavoStore && window.tavoStore.restaurantId;
+    if (!rid && window.tavoSession) {
+      var s = await window.tavoSession;
+      rid = s && s.restaurantId;
+    }
+    if (!rid) return;
+
+    var res = await db.from('seating_areas')
+      .select('id,name')
+      .eq('restaurant_id', rid)
+      .eq('active', true)
+      .order('position', { ascending: true });
+    if (res.error) return console.warn('[tavo]', res.error.message);
+
+    areaListBuilt = true;
+    host.textContent = '';
+    res.data.forEach(function (a) {
+      var opt = vorlage.cloneNode(true);
+      opt.textContent = a.name;
+      opt.setAttribute('data-detail-area-id', a.id);
+      opt.addEventListener('click', function () {
+        if (!current) return;
+        Promise.resolve(window.tavoSetArea(current.id, a.id)).catch(function () {});
+        areaListeMalen({ seating_area_id: a.id });
+      });
+      host.appendChild(opt);
+    });
+  }
+
+  function areaListeMalen(r) {
+    var root = sheetEl();
+    if (!root) return;
+    var host = root.querySelector('[data-detail-area-list]');
+    if (!host) return;
+    var klasse = host.getAttribute('data-detail-active-class') || 'is-active';
+    host.querySelectorAll('[data-detail-area-id]').forEach(function (opt) {
+      opt.classList.toggle(klasse, opt.getAttribute('data-detail-area-id') === r.seating_area_id);
+    });
+  }
+
+  function paint(r) {
+    var root = sheetEl();
+    if (!root) return console.warn('[tavo] Sheet "' + SHEET + '" nicht gefunden');
+
+    var t = tokens(r);
+
+    root.querySelectorAll('[data-detail]').forEach(function (el) {
+      var key = el.getAttribute('data-detail');
+      if (!key) return;
+      var val = t[key];
+      if (val == null) return console.warn('[tavo] unbekanntes Detail-Feld:', key);
+
+      if (el.textContent !== val) el.textContent = val;
+
+      var href = el.getAttribute('data-detail-href');
+      if (href && val) {
+        el.setAttribute('href', href === 'tel' ? 'tel:' + val.replace(/\s/g, '') : 'mailto:' + val);
+      }
+      if (!el.hasAttribute('data-detail-keep')) el.style.display = val ? '' : 'none';
+
+      root.querySelectorAll('[data-detail-wrap="' + key + '"]').forEach(function (wrap) {
+        wrap.style.display = val ? '' : 'none';
+      });
+    });
+
+    root.querySelectorAll('[data-detail-text]').forEach(function (el) {
+      var tpl = el.getAttribute('data-detail-text');
+      if (!tpl) return;
+      var fehlt = false;
+      var out = tpl.replace(/\{(\w+)\}/g, function (_, key) {
+        var v = t[key];
+        if (v === '' || v == null) { fehlt = true; return ''; }
+        return v;
+      });
+      out = fehlt ? '' : out.trim();
+      el.textContent = out || el.getAttribute('data-detail-text-empty') || '';
+      if (!el.hasAttribute('data-detail-keep')) el.style.display = el.textContent ? '' : 'none';
+    });
+
+    root.querySelectorAll('[data-detail-if]').forEach(function (el) {
+      var da = el.getAttribute('data-detail-if').split('|').some(function (k) {
+        var v = t[k.trim()]; return v !== '' && v != null;
+      });
+      el.style.display = da ? '' : 'none';
+    });
+
+    root.querySelectorAll('[data-detail-if-not]').forEach(function (el) {
+      var leer = el.getAttribute('data-detail-if-not').split('|').every(function (k) {
+        var v = t[k.trim()]; return v === '' || v == null;
+      });
+      el.style.display = leer ? '' : 'none';
+    });
+
+    root.querySelectorAll('[data-detail-show-if]').forEach(function (el) {
+      var wanted = el.getAttribute('data-detail-show-if').split('|').map(function (s) { return s.trim(); });
+      var passt = wanted.indexOf(r.status) > -1;
+      // Mit data-detail-if hat die Feldprüfung oben schon entschieden —
+      // der Status darf das Element nur zusätzlich ausblenden.
+      if (!passt) el.style.display = 'none';
+      else if (!el.hasAttribute('data-detail-if')) el.style.display = '';
+    });
+
+    root.setAttribute('data-detail-status', r.status);
+    root.setAttribute('data-detail-source', r.source || '');
+    root.querySelectorAll('[data-detail-show-source]').forEach(function (el) {
+      var quellen = el.getAttribute('data-detail-show-source').split('|').map(function (x) { return x.trim(); });
+      if (quellen.indexOf(r.source || '') < 0) el.style.display = 'none';
+      else if (!el.hasAttribute('data-detail-if') && !el.hasAttribute('data-detail-show-if')) el.style.display = '';
+    });
+    root.setAttribute('data-detail-newsletter', r.newsletter ? 'an' : 'aus');
+    root.querySelectorAll('[data-detail-if-newsletter]').forEach(function (el) {
+      el.style.display = r.newsletter ? '' : 'none';
+    });
+
+    areaListeMalen(r);
+    if (window.tavoFixSheetTime) window.tavoFixSheetTime(r);
+  }
+
+  /* --- Klick auf eine Reservierung --------------------------- */
+  document.addEventListener('tavo:open', function (e) {
+    current = (window.tavoStore && window.tavoStore.get(e.detail.id)) || e.detail;
+    paint(current);
+    areaListeAufbauen().then(function () { if (current) areaListeMalen(current); });
+    if (window.Sheet) window.Sheet.open(SHEET);
+    else console.warn('[tavo] Sheet-Skript nicht geladen');
+  });
+
+  /* --- Aktionen im Sheet (mit Rückgängig) -------------------
+     Zusage / Absage (data-detail-action="confirmed|declined"):
+       Nachricht aus [data-snippet-input="zusage|absage"] → reply,
+       danach Status. Die DB reiht die Gast-Mail ein.
+     Änderungswunsch (change_accepted / change_declined):
+       accept_change / decline_change mit Text aus
+       [data-snippet-input="aenderung"].
+     Mit Status-Chip v3.3 läuft das erst nach dem Countdown —
+     „Rückgängig“ öffnet die Reservierung wieder, Text steht im Feld. */
+  function textFeld(key) {
+    var root = sheetEl();
+    return root && root.querySelector('[data-snippet-input="' + key + '"]');
+  }
+  function feldLeeren(feld) {
+    if (!feld) return;
+    feld.value = '';
+    feld.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  function wiederOeffnen(snap, feld, text) {
+    var frisch = (window.tavoStore && window.tavoStore.get(snap.id)) || snap;
+    setTimeout(function () {
+      document.dispatchEvent(new CustomEvent('tavo:open', { detail: frisch }));
+      setTimeout(function () {
+        if (feld && text) { feld.value = text; feld.dispatchEvent(new Event('input', { bubbles: true })); }
+      }, 80);
+    }, 700);
+  }
+
+  function aktionBauen(status, id) {
+    var db = window.tavoDB;
+    if (!db) {
+      alert('Die Verbindung zur Datenbank ist noch nicht bereit. Bitte noch einmal versuchen.');
+      return null;
+    }
+    if (status === 'change_accepted' || status === 'change_declined') {
+      var feldA = textFeld('aenderung');
+      var textA = feldA ? String(feldA.value || '').trim() : '';
+      var fn = status === 'change_accepted' ? 'accept_change' : 'decline_change';
+      return {
+        feld: feldA, text: textA,
+        run: function () {
+          return db.rpc(fn, { res_id: id, reply_text: textA || null })
+            .then(function (res) { if (res.error) throw res.error; });
+        }
+      };
+    }
+    if (status === 'confirmed') {
+      var picker = window.tavoTables;
+      if (!picker || !picker.readyFor(id)) {
+        alert('Die Tischverfügbarkeit ist noch nicht bereit. Bitte kurz warten oder aktualisieren.');
+        return null;
+      }
+      if (picker.needsPick(id)) { picker.openPicker(); return null; }
+      var chosen = picker.enabled ? picker.idsFor(id) : null;
+      var confirmField = textFeld('zusage');
+      var confirmText = confirmField ? String(confirmField.value || '').trim() : '';
+      return {
+        feld: confirmField, text: confirmText,
+        run: function () {
+          return db.rpc('staff_confirm_with_tables', {
+            p_reservation_id: id, p_table_ids: chosen, p_reply: confirmText || null
+          }).then(function (res) {
+            if (res.error) throw res.error;
+            picker.markSaved(chosen, id);
+            return window.tavoReload ? window.tavoReload() : Promise.resolve();
+          }).then(function () {
+            if (current && current.id === id) {
+              current = (window.tavoStore && window.tavoStore.get(id)) || current;
+              paint(current);
+            }
+          });
+        }
+      };
+    }
+    var isDecision = status === 'confirmed' || status === 'declined';
+    var feld = isDecision ? textFeld(status === 'confirmed' ? 'zusage' : 'absage') : null;
+    var text = feld ? String(feld.value || '').trim() : '';
+    return {
+      feld: feld, text: text,
+      run: function () {
+        // reply zuerst speichern, DANACH den Status: so sieht der
+        // DB-Trigger die Restaurant-Nachricht schon beim Einreihen der Mail.
+        var vorher = isDecision
+          ? db.from('reservations').update({ reply: text || null }).eq('id', id)
+              .then(function (res) { if (res.error) throw res.error; })
+          : Promise.resolve();
+        return vorher.then(function () { return window.tavoSetStatus(id, status); })
+          .then(function () {
+            if (current && current.id === id) {
+              current.status = status;
+              if (isDecision) current.reply = text || null;
+              paint(current);
+            }
+          });
+      }
+    };
+  }
+
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest && e.target.closest('[data-detail-action]');
+    if (!btn || !current) return;
+    e.preventDefault();
+    if (btn.hasAttribute('data-detail-busy')) return;     // Doppelklick
+
+    var status = btn.getAttribute('data-detail-action');
+    var snap = Object.assign({}, current);
+    var job = aktionBauen(status, snap.id);
+    if (!job) return;
+
+    btn.setAttribute('data-detail-busy', '');
+    setTimeout(function () { btn.removeAttribute('data-detail-busy'); }, 900);
+    feldLeeren(job.feld);
+
+    function fehlgeschlagen(err) {
+      console.error('[tavo] ' + status + ':', err && err.message);
+      var frisch = window.tavoStore && window.tavoStore.get(snap.id);
+      if (frisch && current && current.id === snap.id) { current = frisch; paint(current); }
+      if (window.Tavo && window.Tavo.statusChip) {
+        window.Tavo.statusChip.show({ event: 'failed', title: 'Nicht gespeichert', icon: 'x', tone: 'danger', hold: 2400 });
+      }
+      wiederOeffnen(snap, job.feld, job.text);
+    }
+
+    var chip = window.Tavo && window.Tavo.statusChip;
+    if (chip && chip.deferred) {
+      chip.deferred({
+        event: status, trigger: btn, sheet: SHEET, reservation: snap,
+        run: function () { return job.run().catch(fehlgeschlagen); },
+        onUndo: function () { wiederOeffnen(snap, job.feld, job.text); }
+      });
+      return;
+    }
+    job.run().then(function () {
+      if (chip) return chip.show({ event: status, trigger: btn, sheet: SHEET, reservation: current });
+      if (window.Sheet) window.Sheet.close(SHEET);
+    }).catch(function (err) {
+      console.error('[tavo] ' + status + ':', err && err.message);
+      if (job.feld && job.text) job.feld.value = job.text;
+      alert('Das hat nicht geklappt. Bitte noch einmal versuchen.');
+    });
+  });
+
+  /* --- Offenes Sheet live halten ------------------------------ */
+  document.addEventListener('tavo:data', function () {
+    if (!current || !window.Sheet || !window.Sheet.isOpen(SHEET)) return;
+    var store = window.tavoStore;
+    if (!store || !store.ready) return;
+    var frisch = store.get(current.id);
+    if (!frisch) {
+      // Nur schließen, wenn sie wirklich gelöscht ist — außerhalb des
+      // Ladefensters (z. B. aus dem Posteingang) bleibt sie offen.
+      if (window.tavoDB) {
+        window.tavoDB.from('reservations').select('id').eq('id', current.id).maybeSingle()
+          .then(function (res) { if (!res.error && !res.data) window.Sheet.close(SHEET); });
+      }
+      return;
+    }
+    current = frisch;
+    paint(current);
+  });
+})();
+</script>
+

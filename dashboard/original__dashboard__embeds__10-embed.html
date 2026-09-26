@@ -1,0 +1,36 @@
+<script>
+/* tavo — Detail-Sheet in Restaurantzeit (seit Reservierungen v4.7 eigenes Embed)
+   Schreibt Datum/Uhrzeit im Sheet [data-sheet="reservierung"] in der Zeitzone
+   des Restaurants: [data-detail="date|time|change_date|change_time"] und
+   ersetzt Gerätezeiten in [data-detail-text]. API: window.tavoFixSheetTime(r) */
+(function () {
+  'use strict';
+  function fixSheetTime(r) {
+    var k = window.tavoReservierungen && window.tavoReservierungen.kit;
+    if (!k || !r || !r.reserved_at) return;
+    var S = '[data-sheet="reservierung"] ';
+    if (!document.querySelector(S.trim())) return;
+    var qa = function (s) { return [].slice.call(document.querySelectorAll(s)); };
+    var set = function (e, v) { if (e.textContent !== v) e.textContent = v; };
+    var local = function (d) { return { date: k.fmtDate(d), time: k.fmtTime(d) }; };
+    var dev = new Date(r.reserved_at), a = local(k.wall(Date.parse(r.reserved_at)));
+    var map = { date: a.date, time: a.time };
+    var rep = [[k.fmtDate(dev), a.date], [k.fmtTime(dev), a.time]];
+    if (r.change_reserved_at) {
+      var cdev = new Date(r.change_reserved_at), c = local(k.wall(Date.parse(r.change_reserved_at)));
+      map.change_date = c.date; map.change_time = c.time;
+      rep.push([k.fmtDate(cdev), c.date], [k.fmtTime(cdev), c.time]);
+    }
+    Object.keys(map).forEach(function (key) {
+      qa(S + '[data-detail="' + key + '"]').forEach(function (e) { set(e, map[key]); });
+    });
+    qa(S + '[data-detail-text]').forEach(function (e) {
+      var t = e.textContent;
+      rep.forEach(function (x) { if (x[0] !== x[1]) t = t.split(x[0]).join(x[1]); });
+      set(e, t);
+    });
+  }
+  window.tavoFixSheetTime = fixSheetTime;
+  document.addEventListener('tavo:open', function (e) { setTimeout(function () { fixSheetTime(e.detail); }, 0); }, true);
+})();
+</script>

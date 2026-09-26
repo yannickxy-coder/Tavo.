@@ -1,0 +1,158 @@
+<script>
+  /* Dashboard ist eine App, keine Scroll-Seite: Lenis (Site-Footer)
+     hier aus. Spart eine Dauer-rAF-Schleife und kämpft nicht mit den
+     Sheets um das Mausrad. */
+  window.disableLenis = true;
+  window.disablePreloader = true;
+</script>
+<style>
+  /* Listen rendern seit v4 nur ihre Treffer und laden seitenweise
+     nach. content-visibility spart zusätzlich Layout/Paint für
+     Zeilen außerhalb des Sichtfelds. */
+  [data-res-item] {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 72px;
+  }
+  [data-res-list] { contain: layout paint; }
+  [data-inbox-list] > [data-inbox-id] {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 64px;
+  }
+  /* Kein -webkit-overflow-scrolling mehr auf den Sheet-Scrollern:
+     iOS hängt sie damit in eine Ebene, die WebKit bei
+     visibility:hidden wegwirft (siehe Sheet-Skript). */
+  [data-sheet-scroller] { contain: layout paint; }
+</style>
+
+<!-- tavo-widgets · Code liegt auf GitHub: yannickxy-coder/tavo-widgets -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/yannickxy-coder/tavo-widgets@1.0.1/dist/reservieren.min.css" integrity="sha384-PmrMepcjIo8cCmzWElg0uaiydz5rS71lSt8jCPmlOxljyE4da1pDn6L68EP3c66P" crossorigin="anonymous">
+<script>window.TAVO_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indpd2hic3p3a3Vla3hrZGlxY2dkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczNDQ4NzYsImV4cCI6MjEwMjkyMDg3Nn0.X4lLnTq0JjlLuS81-YMB-V2yBmw0fO2n0dcTgZ1k7Js";</script>
+<script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/@cornerkit/core@1.3.0/dist/cornerkit.js"></script>
+<script defer src="https://cdn.jsdelivr.net/gh/yannickxy-coder/tavo-widgets@1.0.1/dist/reservieren.min.js" integrity="sha384-j5tqjtS49zAVItryEnlpfonxslYUq0CmOSq75a16u5Bb3Z/gpQPTSxs0/+1vbKuu" crossorigin="anonymous"></script>
+
+<style>
+/* tavo — Seiten-Loader Dashboard v1 (gleiche Attribute wie „Meine Reservierung")
+   [data-tavo-manage-loading]   Loader (Inhalt frei gestaltbar)
+   [data-tavo-reveal-target]    bleibt unsichtbar, bis alles geladen ist */
+html:not([data-tavo-page-ready]):not([data-tavo-page-revealing]) [data-tavo-reveal-target]{opacity:0!important;visibility:hidden!important;pointer-events:none!important}
+html[data-tavo-page-revealing] [data-tavo-reveal-target]{transition:opacity 700ms cubic-bezier(.22,1,.36,1)!important;pointer-events:none!important}
+[data-tavo-manage-loading]{display:none!important}
+html:not([data-tavo-page-ready]) [data-tavo-manage-loading]{display:flex!important;position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;margin:0!important;align-items:center;justify-content:center;z-index:2147483647;pointer-events:none;opacity:1;transition:opacity 320ms cubic-bezier(.4,0,.2,1)}
+html[data-tavo-loader-hold] [data-tavo-manage-loading],html[data-tavo-page-revealing] [data-tavo-manage-loading]{opacity:0!important}
+[data-tavo-manage-loading] [data-tavo-loading-dots]{display:flex!important}
+[data-tavo-manage-loading] [data-tavo-loading-dots]>*{animation:tavoLoaderDot 1.1s ease-in-out infinite both}
+[data-tavo-manage-loading] [data-tavo-loading-dots]>:nth-child(2){animation-delay:.14s}
+[data-tavo-manage-loading] [data-tavo-loading-dots]>:nth-child(3){animation-delay:.28s}
+@keyframes tavoLoaderDot{0%,80%,100%{transform:translateY(0);opacity:.35}40%{transform:translateY(-5px);opacity:1}}
+@media (prefers-reduced-motion:reduce){html[data-tavo-page-revealing] [data-tavo-reveal-target],[data-tavo-manage-loading]{transition-duration:.01ms!important}[data-tavo-manage-loading] [data-tavo-loading-dots]>*{animation:none}}
+</style>
+<noscript><style>[data-tavo-reveal-target]{opacity:1!important;visibility:visible!important;pointer-events:auto!important}[data-tavo-manage-loading]{display:none!important}</style></noscript>
+<script>
+/* tavo — Seiten-Loader Dashboard v1.1
+   Zeigt das Dashboard erst, wenn alles da ist — statt Stück für Stück.
+   Wartet auf (am Loader änderbar: data-tavo-loader-wait="data,settings,user,background,fonts"):
+     data        erste Reservierungen gerendert   (tavo:hydrated)
+     settings    Betrieb/Öffnungszeiten           (tavo:settings)
+     user        Nutzer- und Restaurantname       ([data-restaurant-name] bzw. [data-user-name] beschrieben)
+     background  echte Ambient-Farben gemalt     (tablefy:background-changed, max. 3 s)
+     fonts       Webfonts geladen
+   data-tavo-loader-max="8000"   spätestens dann trotzdem zeigen (ms)
+   Danach wie „Meine Reservierung": html[data-tavo-page-revealing] → html[data-tavo-page-ready]
+   + Event tavo:page-ready.
+   v1.1: Loader erscheint bei jedem Laden sofort und bleibt mindestens 700 ms
+   stehen, damit er nicht nur aufblitzt. Am Loader änderbar:
+   data-tavo-loader-min="700"   Mindestdauer sichtbar (ms)
+   SHOW_DELAY unten > 0 setzen, wenn er bei schnellem Laden wegfallen soll. */
+(function () {
+  'use strict';
+  var root = document.documentElement, seen = {}, need = null, done = false, domReady = false;
+  var ALL = 'data,settings,user,background,fonts';
+  var SHOW_DELAY = 0;     // ms, bis der Loader erscheint (0 = immer sofort)
+  var MIN_SHOW = 700;     // ms, die er mindestens sichtbar bleibt
+  var shownAt = 0, showT = 0;
+  function show() { if (done) return; root.removeAttribute('data-tavo-loader-hold'); shownAt = performance.now(); }
+  if (SHOW_DELAY > 0) { root.setAttribute('data-tavo-loader-hold', ''); showT = setTimeout(show, SHOW_DELAY); } else show();
+  function mark(n) { if (seen[n]) return; seen[n] = performance.now(); check(); }
+  function loader() { return document.querySelector('[data-tavo-manage-loading]'); }
+  function check() {
+    if (done || !domReady) return;
+    for (var i = 0; i < need.length; i++) if (!seen[need[i]]) return;
+    reveal('ok');
+  }
+  function reveal(reason) {
+    if (done) return;
+    done = true; clearTimeout(showT);
+    root.setAttribute('data-tavo-loader', reason);
+    var el = loader(), min = parseFloat(el && el.getAttribute('data-tavo-loader-min'));
+    var wait = shownAt ? Math.max(0, shownAt + (isNaN(min) ? MIN_SHOW : min) - performance.now()) : 0;
+    setTimeout(function () { requestAnimationFrame(function () { requestAnimationFrame(function () {
+      setTimeout(function () {
+        root.setAttribute('data-tavo-page-revealing', '');
+        setTimeout(function () {
+          root.setAttribute('data-tavo-page-ready', '');
+          root.removeAttribute('data-tavo-page-revealing'); root.removeAttribute('data-tavo-loader-hold');
+          document.dispatchEvent(new CustomEvent('tavo:page-ready', { detail: { reason: reason, waited: seen } }));
+        }, 760);
+      }, 120);
+    }); }); }, wait);
+  }
+
+  document.addEventListener('tavo:hydrated', function () { mark('data'); });
+  document.addEventListener('tavo:settings', function () { mark('settings'); });
+  window.addEventListener('tablefy:background-changed', function () { mark('background'); });
+
+  function fontsDone() { return /\bwf-(active|inactive)\b/.test(root.className); }
+  function waitFonts() {
+    var go = function () { (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(function () { mark('fonts'); }); };
+    if (fontsDone() || !/\bwf-loading\b/.test(root.className)) return go();   // kein Font-Loader aktiv
+    var mo = new MutationObserver(function () { if (fontsDone()) { mo.disconnect(); go(); } });
+    mo.observe(root, { attributes: true, attributeFilter: ['class'] });
+    setTimeout(function () { mo.disconnect(); go(); }, 2500);   // Font-Loader blockiert: nicht ewig warten
+  }
+  waitFonts();
+
+  function boot() {
+    domReady = true;
+    var el = loader();
+    var list = ((el && el.getAttribute('data-tavo-loader-wait')) || ALL).split(',');
+    need = list.map(function (s) { return s.trim(); }).filter(Boolean);
+    var max = parseFloat(el && el.getAttribute('data-tavo-loader-max')) || 8000;
+    setTimeout(function () { reveal('timeout'); }, max);
+    if (!el && !document.querySelector('[data-tavo-reveal-target]')) return reveal('none');
+
+    /* Nutzer-Skript schreibt erst den Nutzer-, zuletzt den Restaurantnamen.
+       Scheitert das Restaurant, reicht der Nutzername + 1,5 s. */
+    var rn = document.querySelector('[data-restaurant-name]'), un = document.querySelector('[data-user-name]');
+    var watch = function (el, fn) { new MutationObserver(function (m, mo) { mo.disconnect(); fn(); }).observe(el, { childList: true, characterData: true, subtree: true }); };
+    if (rn) watch(rn, function () { mark('user'); });
+    if (un) watch(un, function () { if (rn) setTimeout(function () { mark('user'); }, 1500); else mark('user'); });
+    if (!rn && !un) mark('user');
+
+    /* Hintergrund: Das Skript malt beim Start sofort Standardfarben, danach die
+       echten (Event) — oder bei Fehlern erneut Standard. Darum: Event, zweites
+       Malen des Verlaufs, ausgeblendet — oder spätestens nach 3 s. */
+    var bg = document.querySelector('[data-tablefy-dashboard-bg]');
+    if (!bg) mark('background');
+    else {
+      new MutationObserver(function (list, mo) {
+        for (var k = 0; k < list.length; k++) {
+          var t = list[k].target;
+          if ((t.classList && t.classList.contains('tf-bg-gradient')) || (t === bg && bg.style.display === 'none')) { mo.disconnect(); mark('background'); return; }
+        }
+      }).observe(bg, { attributes: true, attributeFilter: ['style'], subtree: true });
+      setTimeout(function () { mark('background'); }, 3000);
+    }
+    if (window.tavoStore && window.tavoStore.ready && document.querySelector('[data-res-item]')) mark('data');
+    check();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true });
+  else boot();
+
+  window.tavoLoader = {
+    get pending() { return (need || ALL.split(',')).filter(function (n) { return !seen[n]; }); },
+    get seen() { return seen; },
+    reveal: function () { reveal('manual'); }
+  };
+})();
+</script>

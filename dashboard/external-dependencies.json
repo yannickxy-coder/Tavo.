@@ -1,0 +1,68 @@
+[
+  {
+    "source": "original__site__footer.html",
+    "tag": "script",
+    "url": "https://cdn.jsdelivr.net/gh/studio-freight/lenis@1.0.23/bundled/lenis.min.js",
+    "attributes": "src=\"https://cdn.jsdelivr.net/gh/studio-freight/lenis@1.0.23/bundled/lenis.min.js\""
+  },
+  {
+    "source": "original__dashboard__head.html",
+    "tag": "script",
+    "url": "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2",
+    "attributes": "defer src=\"https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2\""
+  },
+  {
+    "source": "original__dashboard__head.html",
+    "tag": "script",
+    "url": "https://cdn.jsdelivr.net/npm/@cornerkit/core@1.3.0/dist/cornerkit.js",
+    "attributes": "defer src=\"https://cdn.jsdelivr.net/npm/@cornerkit/core@1.3.0/dist/cornerkit.js\""
+  },
+  {
+    "source": "original__dashboard__head.html",
+    "tag": "script",
+    "url": "https://cdn.jsdelivr.net/gh/yannickxy-coder/tavo-widgets@1.0.1/dist/reservieren.min.js",
+    "attributes": "defer src=\"https://cdn.jsdelivr.net/gh/yannickxy-coder/tavo-widgets@1.0.1/dist/reservieren.min.js\" integrity=\"sha384-j5tqjtS49zAVItryEnlpfonxslYUq0CmOSq75a16u5Bb3Z/gpQPTSxs0/+1vbKuu\" crossorigin=\"anonymous\""
+  },
+  {
+    "source": "original__dashboard__head.html",
+    "tag": "link",
+    "url": "https://cdn.jsdelivr.net/gh/yannickxy-coder/tavo-widgets@1.0.1/dist/reservieren.min.css",
+    "attributes": "rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/gh/yannickxy-coder/tavo-widgets@1.0.1/dist/reservieren.min.css\" integrity=\"sha384-PmrMepcjIo8cCmzWElg0uaiydz5rS71lSt8jCPmlOxljyE4da1pDn6L68EP3c66P\" crossorigin=\"anonymous\""
+  },
+  {
+    "source": "original__dashboard__footer.html",
+    "tag": "script",
+    "url": "https://cdnjs.cloudflare.com/ajax/libs/list.js/2.3.1/list.min.js",
+    "attributes": "src=\"https://cdnjs.cloudflare.com/ajax/libs/list.js/2.3.1/list.min.js\""
+  },
+  {
+    "source": "original__dashboard__footer.html",
+    "tag": "script",
+    "url": "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.min.js",
+    "attributes": "src=\"https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.min.js\""
+  },
+  {
+    "source": "original__dashboard__embeds__20-flip-js.html",
+    "tag": "script",
+    "url": "https://cdn.prod.website-files.com/gsap/3.15.0/Flip.min.js",
+    "attributes": "src=\"https://cdn.prod.website-files.com/gsap/3.15.0/Flip.min.js\""
+  },
+  {
+    "source": "original__dashboard__embeds__20-flip-js.html",
+    "tag": "script",
+    "url": "https://cdn.prod.website-files.com/gsap/3.15.0/CustomEase.min.js",
+    "attributes": "src=\"https://cdn.prod.website-files.com/gsap/3.15.0/CustomEase.min.js\""
+  },
+  {
+    "source": "original__dashboard__embeds__22-create-res-css.html",
+    "tag": "script",
+    "url": "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.min.js",
+    "attributes": "src=\"https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.min.js\""
+  },
+  {
+    "source": "original__dashboard__embeds__25-background-js.html",
+    "tag": "script",
+    "url": "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0",
+    "attributes": "src=\"https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0\""
+  }
+]

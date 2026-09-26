@@ -1,0 +1,190 @@
+<script>
+  /* ============================================================
+   tavo — Nachrichten
+
+   Jede Zusage, Absage, Änderung und freie Nachricht landet in
+   der Tabelle "messages" — mit status='queued'. Der tatsächliche
+   Versand macht NICHT dieses Skript (Supabase kann das nicht),
+   sondern Make: ein Szenario mit "Watch Rows" auf messages,
+   Filter status=queued, danach dein bestehendes Mail-Modul,
+   am Ende ein Update auf status='sent'/'failed'.
+
+   Einbinden NACH dem Hydrator und dem Detail-Sheet-Skript.
+
+   ── IM SHEET ────────────────────────────────────────────────
+   Eine Nachricht mit Versand UND Statuswechsel:
+     <textarea data-detail-message></textarea>
+     <button data-detail-send="confirmed">Zusage senden</button>
+     <button data-detail-send="declined">Absage senden</button>
+
+   Nur eine Nachricht, ohne Statuswechsel:
+     <button data-detail-send="nachricht">Senden</button>
+
+   data-detail-send-kind="aenderung"   überschreibt die Art,
+     falls sie nicht aus dem Status ableitbar ist
+
+   v2: Mit Rückgängig (Status-Chip v3.3): gespeichert wird erst nach
+   dem Countdown. Buttons mit data-detail-action (Zusage/Absage im
+   Detail-Sheet) überlässt dieses Skript dem Detail-Sheet — sonst
+   liefen beide Skripte auf denselben Klick.
+   Textfeld: [data-detail-message] im selben Bereich wie der Button,
+   sonst [data-snippet-input="<art>"].
+   ============================================================ */
+
+(function () {
+  'use strict';
+
+  var STATUS_ZU_ART = {
+    confirmed: 'zusage',
+    declined:  'absage',
+    cancelled: 'storno'
+  };
+
+  function betreffFuer(art, r) {
+    var namen = {
+      zusage: 'Ihre Reservierung ist bestätigt',
+      absage: 'Zu Ihrer Reservierungsanfrage',
+      aenderung: 'Ihre geänderte Reservierung',
+      storno: 'Ihre Reservierung wurde storniert',
+      nachricht: 'Nachricht zu Ihrer Reservierung',
+      erinnerung: 'Erinnerung an Ihre Reservierung'
+    };
+    return namen[art] || 'Nachricht';
+  }
+
+  /* Schreibt eine Zeile in messages. Der Versand selbst passiert
+     nicht hier — Make holt sich queued-Zeilen ab. */
+  async function speichern(reservierung, art, text, kanal) {
+    var db = window.tavoDB, r = window.tavoRestaurant;
+    if (!db) throw new Error('kein Supabase-Client');
+    if (!r) throw new Error('Restaurant noch nicht geladen');
+
+    var res = await db.from('messages').insert({
+      restaurant_id:  r.id,
+      reservation_id: reservierung.id,
+      kind:    art,
+      channel: kanal || 'email',
+      to_email: reservierung.guest_email || null,
+      subject:  betreffFuer(art, reservierung),
+      body:     text
+    }).select().single();
+
+    if (res.error) throw res.error;
+    return res.data;
+  }
+
+  window.Tavo = window.Tavo || {};
+
+  /* Von Hand aufrufbar, z. B. für eine Erinnerung ohne Button:
+       Tavo.sendMessage(reservierung, 'erinnerung', text) */
+  window.Tavo.sendMessage = speichern;
+
+  /* ── Buttons im Sheet ────────────────────────────────────── */
+  function feldFuer(btn, art) {
+    var bereich = btn.closest('[data-sheet-page], [data-sheet-nav-page], form, .w-form, [data-sheet]');
+    var feld = bereich && bereich.querySelector('[data-detail-message]');
+    return feld
+      || document.querySelector('[data-detail-message][data-snippet-input="' + art + '"]')
+      || document.querySelector('[data-snippet-input="' + art + '"]')
+      || document.querySelector('[data-detail-message]');
+  }
+  function wiederOeffnen(r, feld, text) {
+    var frisch = (window.tavoStore && window.tavoStore.get(r.id)) || r;
+    setTimeout(function () {
+      document.dispatchEvent(new CustomEvent('tavo:open', { detail: frisch }));
+      setTimeout(function () {
+        if (feld && text) { feld.value = text; feld.dispatchEvent(new Event('input', { bubbles: true })); }
+      }, 80);
+    }, 700);
+  }
+
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest && e.target.closest('[data-detail-send]');
+    if (!btn) return;
+    if (btn.hasAttribute('data-detail-action')) return;   // macht das Detail-Sheet
+    e.preventDefault();
+    if (btn.hasAttribute('data-detail-busy')) return;
+
+    var r = window.tavoAktuelleReservierung || null;
+    // Fällt zurück auf das, was das Detail-Sheet zuletzt geöffnet hat
+    if (!r && window.__tavoCurrent) r = window.__tavoCurrent;
+    if (!r) return console.warn('[tavo] keine offene Reservierung');
+    r = Object.assign({}, r);
+
+    var status = btn.getAttribute('data-detail-send');
+    var art = btn.getAttribute('data-detail-send-kind') || STATUS_ZU_ART[status] || status;
+
+    var feld = feldFuer(btn, art);
+    var text = feld ? feld.value.trim() : '';
+    if (!text) {
+      btn.setAttribute('data-detail-error', '');
+      setTimeout(function () { btn.removeAttribute('data-detail-error'); }, 1500);
+      return console.warn('[tavo] Nachrichtenfeld ist leer');
+    }
+
+    btn.setAttribute('data-detail-busy', '');
+    setTimeout(function () { btn.removeAttribute('data-detail-busy'); }, 900);
+    if (feld) { feld.value = ''; feld.dispatchEvent(new Event('input', { bubbles: true })); }
+
+    // Nur bei einem echten Status-Übergang wird zusätzlich der
+    // Reservierungsstatus geändert — "nachricht" tut das nie.
+    var mitStatus = !!STATUS_ZU_ART[status];
+    function ausfuehren() {
+      var kette = speichern(r, art, text);
+      if (mitStatus) kette = kette.then(function () { return window.tavoSetStatus(r.id, status); });
+      return kette.then(function () {
+        document.dispatchEvent(new CustomEvent('tavo:message-sent', {
+          detail: { reservation: r, kind: art }
+        }));
+      });
+    }
+    function fehlgeschlagen(err) {
+      console.error('[tavo]', err && err.message);
+      if (window.Tavo && window.Tavo.statusChip) {
+        window.Tavo.statusChip.show({ event: 'failed', title: 'Nicht gesendet', icon: 'x', tone: 'danger', hold: 2400 });
+      }
+      wiederOeffnen(r, feld, text);
+    }
+
+    var chipEvent = status === 'nachricht' ? 'message' : status;
+    var chip = window.Tavo && window.Tavo.statusChip;
+    if (chip && chip.deferred) {
+      chip.deferred({
+        event: chipEvent, trigger: btn, sheet: 'reservierung', reservation: r,
+        run: function () { return ausfuehren().catch(fehlgeschlagen); },
+        onUndo: function () { wiederOeffnen(r, feld, text); }
+      });
+      return;
+    }
+    ausfuehren().then(function () {
+      if (chip) return chip.show({ event: chipEvent, trigger: btn, sheet: 'reservierung', reservation: r });
+      if (window.Sheet) window.Sheet.close('reservierung');
+    }).catch(function (err) {
+      console.error('[tavo]', err && err.message);
+      if (feld) feld.value = text;
+      btn.setAttribute('data-detail-error', '');
+      setTimeout(function () { btn.removeAttribute('data-detail-error'); }, 2000);
+    });
+  });
+
+  /* Merkt sich die zuletzt geöffnete Reservierung, damit die
+     Sende-Buttons wissen, wofür sie schreiben — auch wenn sie in
+     einer Sheet-Nav-Unterseite liegen, nicht im Grundinhalt. */
+  document.addEventListener('tavo:open', function (e) {
+    window.__tavoCurrent = e.detail;
+  });
+})();
+</script>
+<script>
+  document.addEventListener('sheet:open', function (e) {
+  if (e.detail.name !== 'zusage') return;
+  var r = window.__tavoCurrent;
+  if (!r) return;
+
+  var d = new Date(r.reserved_at);
+  var titel = document.querySelector('[data-zusage-titel]');
+  if (titel) titel.textContent = r.guest_name + ' · ' +
+    String(d.getDate()).padStart(2,'0') + '.' + String(d.getMonth()+1).padStart(2,'0') +
+    ' · ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+});
+</script>

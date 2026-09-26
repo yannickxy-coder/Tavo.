@@ -1,0 +1,29 @@
+<script>
+/* tavo — Trennpunkte in Reservierungszeilen
+   Bricht eine Zeile um (z. B. „Tische 10, 12 +2" rutscht in die nächste Zeile),
+   wird der Punkt am Zeilenende ausgeblendet. Gilt für .spacer-dot in [data-res-item]. */
+(function () {
+  'use strict';
+  var raf = 0, rt = 0;
+  function vis(el) { return !!el && el.offsetParent !== null; }
+  function run() {
+    raf = 0;
+    var dots = [].slice.call(document.querySelectorAll('[data-res-item] .spacer-dot'));
+    var out = dots.map(function (d) {
+      if (!vis(d)) return null;
+      var n = d.nextElementSibling;
+      while (n && !vis(n)) n = n.nextElementSibling;
+      return !n || n.offsetTop > d.offsetTop + d.offsetHeight;
+    });
+    dots.forEach(function (d, i) {
+      if (out[i] === null) return;
+      var v = out[i] ? 'hidden' : '';
+      if (d.style.visibility !== v) d.style.visibility = v;
+    });
+  }
+  function soon() { if (!raf) raf = requestAnimationFrame(run); }
+  ['tavo:rendered', 'tavo:push-open', 'tavo:page-ready'].forEach(function (e) { document.addEventListener(e, soon); });
+  addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(soon, 120); }, { passive: true });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(soon);
+})();
+</script>

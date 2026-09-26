@@ -1,0 +1,396 @@
+<style>
+/* Nur Bewegung — alle Farben und Zustände stylst du im Designer
+   über die Combo-Klassen is-on / is-off / is-warn / is-empty / is-bad / is-warning. */
+[data-tz-card]{opacity:0;transform:translateY(8px) scale(.99);transition:opacity 260ms ease,transform 380ms cubic-bezier(.2,.8,.2,1)}
+[data-tz-card].is-ready{opacity:1;transform:none}
+[data-tz-chip],[data-tz-sugg-item]{transition:background-color 160ms ease,box-shadow 160ms ease,opacity 160ms ease,transform 120ms ease}
+[data-tz-chip]:active{transform:scale(.96)}
+[data-tz-apply].is-off{pointer-events:none}
+@media(prefers-reduced-motion:reduce){[data-tz-card],[data-tz-chip],[data-tz-sugg-item]{transition:none!important;transform:none!important}}
+</style>
+<script>
+/* ============================================================
+   tavo — Tischzuordnung v4.3
+   Zeigt im Zusage-Sheet den vorgeschlagenen Tisch, bevor bestätigt
+   wird. Ändern über die Unterseite [data-sheetnav-page="tische"].
+   Datenquelle: staff_table_options (Supabase).
+   Ist die Tischverwaltung im Restaurant aus, blendet sich alles aus
+   (optional: [data-tz-disabled] auf der Unterseite wird dann gezeigt).
+   Freie Auswahl: jede Kombination ist erlaubt, auch zu kleine Tische —
+   sie werden nur rot markiert. Zusage ohne Tisch geht ebenfalls
+   ([data-tz-skip]); der Tisch lässt sich später nachtragen.
+
+   Detail-Sheet:
+     [data-detail="table_label"]      "Tisch 10 + 20" / "Kein Tisch gewählt"
+     [data-detail-wrap="table_label"] Zeile; ohne Tischverwaltung ausgeblendet
+     [data-tz-assigned] / [data-tz-assigned-wrap]  dasselbe unter eigenem Namen
+   Ohne Tisch bekommen beide die Klasse is-warning.
+
+   „Offen“ = pending oder change_requested: Auswahl wird mit der Zusage
+   gespeichert. Bei bestätigten Reservierungen speichert „Tisch speichern“
+   sofort (Rückgängig über den Status-Chip). Das Sheet bleibt offen.
+
+   Styling (nur Klassen, keine Farben):
+     is-on       gewählt — auf [data-tz-sugg-on] bzw. [data-tz-chip-on];
+                 fehlt das Attribut, sucht das Skript .tz-sugg-chip-wrapper,
+                 sonst landet die Klasse auf dem Element selbst
+     is-off      Tisch-Chip belegt/gesperrt
+     is-warn     Karte: zu wenig Plätze oder Fehler
+     is-empty    Karte: kein Tisch gewählt
+     is-busy     Karte: lädt
+     is-bad      Summenzeile: zu wenig Plätze
+     is-warning  Detail-Zeile: kein Tisch gewählt
+   Eigene Namen: data-tz-class-on / -off / -warn / -empty / -busy /
+   -bad / -warning am Element mit [data-tz-card].
+   ============================================================ */
+(function () {
+  'use strict';
+  var PAGE = 'tische';
+  var SUGG_WRAP = 'tz-sugg-chip-wrapper';
+  var S = {
+    enabled: false, res: null, tables: [], sugg: [], sel: [], saved: [], raw: {},
+    loading: false, ready: false, error: '', warning: '', skip: false, fromGuest: false, seq: 0
+  };
+  // Offen = noch nicht zugesagt: Auswahl geht mit der Zusage raus.
+  function offen() { return !S.res || S.res.status === 'pending' || S.res.status === 'change_requested'; }
+
+  var KL = { on: 'is-on', off: 'is-off', warn: 'is-warn', empty: 'is-empty', busy: 'is-busy', bad: 'is-bad', warning: 'is-warning' };
+  function klassen() {
+    var card = document.querySelector('[data-tz-card]');
+    if (!card) return;
+    Object.keys(KL).forEach(function (k) {
+      var v = card.getAttribute('data-tz-class-' + k);
+      if (v) KL[k] = v.trim();
+    });
+  }
+
+  function q(s, r) { return (r || document).querySelector(s); }
+  function qa(s, r) { return [].slice.call((r || document).querySelectorAll(s)); }
+  function cls(el, c, on) { if (el) el.classList.toggle(c, !!on); }
+  function show(el, on) { if (el) el.style.display = on ? '' : 'none'; }
+  function txt(el, v) { if (el) el.textContent = v; }
+  function tplOf(host, sel) { if (!host) return null; if (host.__tpl === undefined) { var t = host.querySelector(sel); host.__tpl = t ? t.cloneNode(true) : null; if (t) t.remove(); } return host.__tpl; }
+  function party() { var r = S.res; return r ? (r.status === 'change_requested' && r.change_party_size ? r.change_party_size : r.party_size) : 0; }
+
+  // IDs intern immer als String (Zahl vs. String würde sonst nie matchen),
+  // an Supabase geht der Originalwert zurück.
+  function sid(x) { return x == null ? '' : String(x); }
+  function merk(id) { var k = sid(id); if (k && !Object.prototype.hasOwnProperty.call(S.raw, k)) S.raw[k] = id; return k; }
+  function raw(ids) { return ids.map(function (i) { return Object.prototype.hasOwnProperty.call(S.raw, i) ? S.raw[i] : i; }); }
+
+  // Ziel für die „on“-Klasse: Element selbst mit Attribut, Kind mit
+  // Attribut, Kind mit Fallback-Klasse, sonst das Element.
+  function onTarget(el, attr, fb) {
+    if (el.hasAttribute(attr)) return el;
+    return q('[' + attr + ']', el) || (fb ? q('.' + fb, el) : null) || el;
+  }
+
+  function same(a, b) { return a.length === b.length && a.every(function (x) { return b.indexOf(x) > -1; }); }
+  function kombi(ids) { return S.sugg.filter(function (v) { return same(v.table_ids, ids); })[0] || null; }
+  function seats(ids) { var k = kombi(ids); if (k) return k.capacity;
+    return S.tables.filter(function (t) { return ids.indexOf(t.id) > -1; }).reduce(function (n, t) { return n + (t.capacity || 0); }, 0); }
+  // Natürliche Sortierung: 2 < 10 < 10a < B1 (Zahlen als Zahlen, nicht als Text).
+  function byNum(a, b) {
+    return String(a.table_number == null ? '' : a.table_number)
+      .localeCompare(String(b.table_number == null ? '' : b.table_number), 'de', { numeric: true, sensitivity: 'base' });
+  }
+  function numbers(ids) { return S.tables.filter(function (t) { return ids.indexOf(t.id) > -1; }).sort(byNum).map(function (t) { return t.table_number; }); }
+  function areaOf(ids) { var t = S.tables.filter(function (x) { return ids.indexOf(x.id) > -1; })[0]; return t ? t.seating_area_name : ''; }
+  function areaName(id) { var t = S.tables.filter(function (x) { return x.seating_area_id === id; })[0]; return t ? t.seating_area_name : ''; }
+
+  function paintAll() { paintCard(); paintPicker(); paintAssigned(); }
+
+  /* ── Karte im Zusage-Sheet ───────────────────────── */
+  function paintCard() {
+    var card = q('[data-tz-card]');
+    if (!card) return;
+    if (!S.enabled) { show(card, false); return; }
+    show(card, true);
+    var n = numbers(S.sel), pax = party(), cap = seats(S.sel), spare = cap - pax, neu = offen();
+    var label = q('[data-tz-label]', card), meta = q('[data-tz-meta]', card), badge = q('[data-tz-badge]', card), hint = q('[data-tz-hint]', card);
+    if (S.loading) { txt(label, 'Suche freien Tisch …'); txt(meta, ''); txt(badge, 'Moment'); txt(hint, ''); }
+    else if (S.error) {
+      txt(label, 'Tische nicht geladen'); txt(meta, S.error); txt(badge, 'Fehler');
+      txt(hint, 'Tischauswahl öffnen und erneut versuchen.');
+    } else if (!S.sel.length) {
+      txt(label, S.skip ? 'Ohne Tisch' : 'Kein Tisch gewählt');
+      txt(meta, S.skip ? 'Du trägst den Tisch später nach.'
+        : !S.tables.length ? 'Für diesen Bereich sind keine Tische angelegt.'
+        : neu ? 'Zu dieser Zeit ist kein Tisch frei — du kannst trotzdem zusagen.'
+        : 'Zu dieser Zeit ist kein Tisch frei.');
+      txt(badge, S.skip ? 'Später' : 'Kein Vorschlag');
+      txt(hint, neu ? 'Die Zusage geht auch ohne Tisch raus.' : 'Tisch über die Auswahl nachtragen.');
+    } else {
+      txt(label, 'Tisch ' + n.join(' + '));
+      txt(meta, cap + (cap === 1 ? ' Platz' : ' Plätze') + ' · '
+        + (spare < 0 ? Math.abs(spare) + ' zu wenig' : spare === 0 ? 'passt genau' : spare + ' frei')
+        + (areaOf(S.sel) ? ' · ' + areaOf(S.sel) : ''));
+      txt(badge, spare < 0 ? 'Zu klein' : S.fromGuest ? 'Zugeordnet' : kombi(S.sel) ? (spare === 0 ? 'Passt genau' : 'Vorschlag') : 'Eigene Wahl');
+      txt(hint, S.warning || (neu ? 'Wird mit der Zusage gespeichert'
+        : same(S.sel, S.saved) ? 'Aktuell zugeordnet' : 'Noch nicht gespeichert'));
+    }
+    cls(card, KL.warn, !S.loading && (!!S.error || (S.sel.length > 0 && spare < 0)));
+    cls(card, KL.empty, !S.loading && !S.error && !S.sel.length);
+    cls(card, KL.busy, S.loading);
+    cls(card, 'is-ready', false);
+    requestAnimationFrame(function () { cls(card, 'is-ready', true); });
+  }
+
+  /* ── Gespeicherter Tisch im Detail-Sheet ─────────────── */
+  function paintAssigned() {
+    // S.enabled bleibt beim Laden auf dem letzten bekannten Wert
+    // (gleiches Restaurant), damit die Zeile nicht flackert.
+    var st = !S.res || !S.enabled ? 'off'
+      : S.loading ? 'load'
+      : S.error ? 'err'
+      : S.saved.length ? 'ok' : 'none';
+    var text = st === 'ok' ? 'Tisch ' + numbers(S.saved).join(' + ')
+      : st === 'none' ? 'Kein Tisch gewählt'
+      : st === 'load' ? '…'
+      : st === 'err' ? 'Tisch unbekannt' : '';
+    var sichtbar = st !== 'off', warn = st === 'none';
+    qa('[data-detail="table_label"], [data-tz-assigned]').forEach(function (el) {
+      txt(el, text); show(el, sichtbar); cls(el, KL.warning, warn);
+    });
+    qa('[data-detail-wrap="table_label"], [data-tz-assigned-wrap]').forEach(function (el) {
+      show(el, sichtbar); cls(el, KL.warning, warn);
+    });
+  }
+
+  /* ── Unterseite „Tisch wählen“ ───────────────────── */
+  function paintPicker() {
+    var page = q('[data-sheetnav-page="' + PAGE + '"]');
+    if (!page) return;
+    var aus = S.ready && !S.enabled;
+    show(q('[data-tz-disabled]', page), aus);
+    txt(q('[data-tz-party]', page), party() + (party() === 1 ? ' Gast' : ' Gäste'));
+
+    var sugg = S.enabled ? S.sugg : [];
+    var sHost = q('[data-tz-sugg]', page), sTpl = tplOf(sHost, '[data-tz-sugg-template]');
+    if (sHost && sTpl) {
+      qa('[data-tz-sugg-item]', sHost).forEach(function (n) { n.remove(); });
+      sugg.forEach(function (v) {
+        var el = sTpl.cloneNode(true);
+        el.removeAttribute('data-tz-sugg-template'); el.setAttribute('data-tz-sugg-item', '');
+        txt(q('[data-tz-sugg-label]', el), v.table_numbers.join(' + '));
+        txt(q('[data-tz-sugg-meta]', el), v.capacity + (v.capacity === 1 ? ' Platz' : ' Plätze'));
+        var bereich = areaName(v.seating_area_id) || areaOf(v.table_ids);
+        var aEl = q('[data-tz-sugg-area]', el);
+        if (aEl) { txt(aEl, bereich); show(aEl, !!bereich); }
+        cls(onTarget(el, 'data-tz-sugg-on', SUGG_WRAP), KL.on, same(v.table_ids, S.sel));
+        el.addEventListener('click', function (e) {
+          e.preventDefault();
+          S.sel = v.table_ids.slice(); S.skip = false; S.fromGuest = false;
+          paintPicker(); paintCard();
+        });
+        sHost.appendChild(el);
+      });
+    }
+    show(q('[data-tz-sugg-block]', page), sugg.length > 0);
+
+    var tables = S.enabled ? S.tables : [];
+    var block = q('[data-tz-area-block]', page);
+    if (block) {
+      if (!page.__areaTpl) { page.__areaTpl = block.cloneNode(true); }
+      qa('[data-tz-area-clone]', page).forEach(function (n) { n.remove(); });
+      show(block, false);
+      var areas = [];
+      tables.forEach(function (t) { if (!areas.some(function (a) { return a.id === t.seating_area_id; })) areas.push({ id: t.seating_area_id, name: t.seating_area_name }); });
+      areas.forEach(function (a) {
+        var ab = page.__areaTpl.cloneNode(true);
+        ab.removeAttribute('data-tz-area-block'); ab.setAttribute('data-tz-area-clone', '');
+        ab.style.display = '';
+        txt(q('[data-tz-area-name]', ab), a.name);
+        var grid = q('[data-tz-grid]', ab), tpl = q('[data-tz-chip-template]', ab);
+        if (!grid || !tpl) return;
+        var chipTpl = tpl.cloneNode(true); tpl.remove();
+        tables.filter(function (t) { return t.seating_area_id === a.id; }).sort(byNum).forEach(function (t) {
+          var el = chipTpl.cloneNode(true);
+          el.removeAttribute('data-tz-chip-template'); el.setAttribute('data-tz-chip', t.id); el.setAttribute('role', 'button'); el.setAttribute('tabindex', '0');
+          txt(q('[data-tz-chip-num]', el), t.table_number);
+          txt(q('[data-tz-chip-cap]', el), (t.capacity || 0) + 'P');
+          var frei = t.active !== false && (t.available || t.assigned);
+          cls(onTarget(el, 'data-tz-chip-on', null), KL.on, S.sel.indexOf(t.id) > -1);
+          cls(el, KL.off, !frei);
+          el.setAttribute('aria-disabled', String(!frei));
+          el.addEventListener('click', function (e) {
+            e.preventDefault();
+            if (!frei) return;
+            var i = S.sel.indexOf(t.id);
+            if (i > -1) S.sel.splice(i, 1); else S.sel.push(t.id);
+            S.skip = false; S.fromGuest = false;
+            paintPicker(); paintCard();
+          });
+          el.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); } });
+          grid.appendChild(el);
+        });
+        block.parentNode.insertBefore(ab, block);
+      });
+    }
+    show(q('[data-tz-leer]', page), S.ready && S.enabled && S.tables.length === 0);
+
+    var pax = party(), cap = seats(S.sel), spare = cap - pax;
+    txt(q('[data-tz-sum]', page), S.sel.length ? S.sel.length + (S.sel.length === 1 ? ' Tisch · ' : ' Tische · ') + cap + ' Plätze' : 'Noch kein Tisch gewählt');
+    txt(q('[data-tz-sum-sub]', page), S.sel.length
+      ? 'für ' + pax + (pax === 1 ? ' Gast' : ' Gäste') + ' · ' + (spare < 0 ? Math.abs(spare) + ' Plätze zu wenig' : spare === 0 ? 'passt genau' : spare + ' Plätze Reserve')
+      : 'Tische antippen — belegte sind ausgegraut.');
+    var sumEl = q('[data-tz-sum]', page);
+    cls(sumEl && sumEl.closest('[data-tz-sum-wrap]') || (sumEl && sumEl.parentElement && sumEl.parentElement.parentElement), KL.bad, S.sel.length > 0 && spare < 0);
+
+    var apply = q('[data-tz-apply]', page);
+    cls(apply, KL.off, false);
+    if (apply) txt(q('[data-tz-apply-label]', page) || apply, offen() ? 'Übernehmen' : 'Tisch speichern');
+    var skip = q('[data-tz-skip]', page);
+    if (skip) {
+      cls(skip, KL.on, S.skip && !S.sel.length);
+      txt(q('[data-tz-skip-label]', page) || skip,
+        S.sel.length ? 'Auswahl aufheben'
+        : offen() ? 'Ohne Tisch — später zuordnen'
+        : S.saved.length ? 'Tisch entfernen' : 'Ohne Tisch lassen');
+    }
+  }
+
+  /* ── Laden ───────────────────────────────────── */
+  function load(res) {
+    var db = window.tavoDB;
+    var seq = ++S.seq;
+    S.ready = false; S.error = ''; S.warning = ''; S.skip = false;
+    S.res = res; S.sel = []; S.sugg = []; S.tables = []; S.saved = []; S.raw = {}; S.fromGuest = false;
+    if (!db || !res) { S.enabled = false; S.loading = false; paintAll(); return Promise.resolve(); }
+    S.loading = true; paintAll();
+    return db.rpc('staff_table_options', { p_reservation_id: res.id, p_limit: 100, p_use_requested_change: res.status === 'change_requested', p_buffer_minutes: 0 })
+      .then(function (r) {
+        if (seq !== S.seq) return;
+        S.loading = false;
+        if (r.error) { console.warn('[tavo-tische]', r.error.message); S.error = r.error.message; paintAll(); return; }
+        var d = r.data || {};
+        S.enabled = d.enabled !== false; S.ready = true;
+        S.warning = d.availability_complete === false
+          ? d.unassigned_reservations + ' weitere Anfrage(n) ohne Tisch in diesem Zeitraum.' : '';
+        S.tables = (d.tables || []).map(function (t) { var c = Object.assign({}, t); c.id = merk(t.id); return c; });
+        S.sugg = (d.suggestions || []).map(function (v) { var c = Object.assign({}, v); c.table_ids = (v.table_ids || []).map(merk); return c; });
+        var zug = (d.assigned_tables || []).map(function (t) { return merk(t.id != null ? t.id : t.table_id); }).filter(Boolean);
+        S.saved = zug.slice();
+        if (zug.length) { S.sel = zug.slice(); S.fromGuest = true; }
+        else if (S.sugg[0]) S.sel = S.sugg[0].table_ids.slice();
+        paintAll();
+      })
+      .catch(function (err) {
+        if (seq !== S.seq) return;
+        S.loading = false; S.error = (err && err.message) || 'Verbindung fehlgeschlagen';
+        paintAll();
+      });
+  }
+
+  /* ── Öffentliche API für das Detail-Sheet ───────────── */
+  window.tavoTables = {
+    get enabled() { return S.enabled; },
+    readyFor: function (id) { return S.ready && !S.loading && S.res && S.res.id === id; },
+    idsFor: function (id) { return S.res && S.res.id === id ? raw(S.sel) : []; },
+    labelFor: function (id) { return S.res && S.res.id === id ? numbers(S.sel).join(' + ') : ''; },
+    skipped: function (id) { return S.res && S.res.id === id && !S.sel.length; },
+    needsPick: function (id) { return S.enabled && S.res && S.res.id === id && !S.sel.length && !S.skip; },
+    tooSmall: function (id) { return S.res && S.res.id === id && S.sel.length > 0 && seats(S.sel) < party(); },
+    save: function (id) {
+      var db = window.tavoDB;
+      if (!db || !S.res || S.res.id !== id) return Promise.resolve(null);
+      var ids = S.sel.slice();
+      return db.rpc('staff_assign_reservation_tables', { p_reservation_id: id, p_table_ids: raw(ids), p_buffer_minutes: 0 })
+        .then(function (r) {
+          if (r.error) throw r.error;
+          if (S.res && S.res.id === id) { S.saved = ids; S.fromGuest = ids.length > 0; paintAll(); }
+          return r.data;
+        });
+    },
+    reload: function () { return load(S.res); },
+    markSaved: function (ids, id) {
+      if (id && (!S.res || S.res.id !== id)) return;
+      S.sel = (ids || []).map(merk); S.saved = S.sel.slice(); S.skip = !S.sel.length; S.fromGuest = S.sel.length > 0;
+      paintAll();
+    },
+    openPicker: function () { var b = document.querySelector('[data-tz-change]'); if (b) b.click(); }
+  };
+
+  /* ── Umlegen bei bereits bestätigter Reservierung ─────── */
+  function speichern(ids, titel) {
+    var res = S.res, vorher = S.saved.slice(), rawIds = raw(ids), chip = window.Tavo && window.Tavo.statusChip;
+    // Während des Undo-Fensters kann eine andere Reservierung offen sein —
+    // dann nur die DB anfassen, nicht den State der neuen.
+    function aktiv() { return S.res && S.res.id === res.id; }
+    function zurueck() {
+      if (!aktiv()) return;
+      S.sel = vorher.slice(); S.saved = vorher.slice(); S.fromGuest = vorher.length > 0; S.skip = false;
+      paintAll();
+    }
+    function schreiben() {
+      return window.tavoDB.rpc('staff_assign_reservation_tables',
+        { p_reservation_id: res.id, p_table_ids: rawIds, p_buffer_minutes: 0 })
+        .then(function (r) {
+          if (r.error) throw r.error;
+          if (aktiv()) { S.saved = ids.slice(); S.fromGuest = ids.length > 0; paintAll(); }
+          if (window.tavoReload) window.tavoReload();
+        })
+        .catch(function (err) {
+          console.warn('[tavo-tische]', err && err.message);
+          zurueck();
+          if (chip) chip.show({ event: 'failed', title: 'Tisch nicht gespeichert', icon: 'x', tone: 'danger', hold: 2400 });
+        });
+    }
+    if (chip && chip.deferred) {
+      chip.deferred({
+        // Kein sheet: — das Bottom Sheet bleibt offen.
+        event: 'tisch', title: titel, icon: 'check', tone: 'success',
+        run: schreiben,
+        onUndo: zurueck
+      });
+      return;
+    }
+    schreiben();
+  }
+
+  klassen();
+
+  // Skip-Knopf: mit Auswahl = nur aufheben und auf der Seite bleiben,
+  // ohne Auswahl = ohne Tisch (offen) bzw. Zuordnung löschen (bestätigt).
+  document.addEventListener('click', function (e) {
+    var skip = e.target.closest && e.target.closest('[data-tz-skip]');
+    if (!skip) return;
+    var hatteAuswahl = S.sel.length > 0;
+    S.sel = []; S.skip = !hatteAuswahl; S.fromGuest = false;
+    paintPicker(); paintCard();
+    if (hatteAuswahl) { e.preventDefault(); e.stopPropagation(); return; }
+    if (S.ready && !offen() && S.saved.length) speichern([], 'Tisch entfernt');
+  }, true);
+
+  document.addEventListener('tavo:open', function (e) { load(e.detail); });
+
+  document.addEventListener('click', function (e) {
+    var open = e.target.closest && e.target.closest('[data-sheetnav-open]');
+    var name = open && open.getAttribute('data-sheetnav-open');
+    if ((name === 'zusage' || name === 'tische') && S.res && !S.tables.length && !S.loading) load(S.res);
+    var apply = e.target.closest && e.target.closest('[data-tz-apply]');
+    if (apply) {
+      if (!S.sel.length) S.skip = true;
+      // Auch „alles abgewählt“ speichern — sonst bleibt der alte Tisch in der DB.
+      if (S.ready && !offen() && !same(S.sel, S.saved))
+        speichern(S.sel.slice(), S.sel.length ? 'Tisch umgelegt' : 'Tisch entfernt');
+    }
+  }, true);
+
+  // Realtime: Personenzahl/Status können sich ändern → Karte und Picker
+  // nachziehen. Detail-Zeile zweimal malen, damit der Rohwert ("30"),
+  // den das Detail-Sheet ins Feld schreibt, sicher überschrieben wird.
+  document.addEventListener('tavo:data', function () {
+    if (S.res && window.tavoStore) {
+      var f = window.tavoStore.get(S.res.id);
+      if (f) {
+        var vorher = party() + '|' + S.res.status;
+        S.res = f;
+        if (party() + '|' + S.res.status !== vorher) { paintCard(); paintPicker(); }
+      }
+    }
+    paintAssigned();
+    requestAnimationFrame(paintAssigned);
+  });
+})();
+</script>

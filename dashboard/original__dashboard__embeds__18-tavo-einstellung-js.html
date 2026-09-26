@@ -1,0 +1,340 @@
+<script>
+  /* ============================================================
+   tavo — Einstellungen aus Supabase
+
+   Schreibt Kapazität, Servicezeiten, Ruhetage und Schließtage
+   ins Markup, wo Reservierungen v4 sie erwartet
+   (data-res-config und [data-res-closed]).
+
+   v4.1: Session aus dem Core (keine eigene Membership-Abfrage),
+   Restaurant, Öffnungszeiten und Schließtage parallel geladen.
+
+   ── IM DESIGNER ───────────────────────────────────────
+     <div data-res-config></div>      Werte trägt das Skript ein.
+     Von Hand gesetzte Werte bleiben stehen und gewinnen.
+     <div data-res-closed-list></div> optional
+
+   ── ANZEIGEN ───────────────────────────────────────────
+   data-shop="name" · capacity · phone · email · address · ref_prefix
+     service_start · service_end · slot_minutes · max_party_size
+     lead_time_hours · horizon_days · closed_label · closures
+     hours_today · hours_tomorrow
+   data-shop-hours > data-shop-hours-row > -day / -time
+
+   ── EVENT ───────────────────────────────────────────
+   tavo:settings   detail: { restaurant, closures }
+   ── API ────────────────────────────────────────────
+   window.tavoRestaurant · Tavo.saveSettings({...}) · Tavo.addClosure()
+   Tavo.setHours(wd, [...]) · Tavo.getHours(wd) · Tavo.reloadSettings()
+   ============================================================ */
+
+(function () {
+  'use strict';
+
+  var WD = ['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag'];
+
+  function hhmm(t) { return String(t || '').slice(0, 5); }
+  function datum(iso) {
+    if (!iso) return '';
+    var p = String(iso).split('-');
+    return p.length === 3 ? p[2] + '.' + p[1] + '.' + p[0] : iso;
+  }
+
+  function setzeWennLeer(el, name, wert) {
+    if (wert === null || wert === undefined || wert === '') return;
+    var vorhanden = el.getAttribute(name);
+    if (vorhanden !== null && vorhanden !== '') return;
+    el.setAttribute(name, String(wert));
+  }
+
+  var zeiten = [];
+
+  function fensterFuer(wd) {
+    return zeiten.filter(function (z) { return z.weekday === wd; })
+                 .sort(function (a, b) { return a.opens < b.opens ? -1 : 1; });
+  }
+  function ruhetage() {
+    var out = [];
+    for (var d = 0; d < 7; d++) if (!fensterFuer(d).length) out.push(d);
+    return out;
+  }
+  function spanne(wd) {
+    var f = fensterFuer(wd);
+    if (!f.length) return null;
+    return { start: hhmm(f[0].opens), ende: hhmm(f[f.length - 1].closes) };
+  }
+  function zeitText(wd) {
+    var f = fensterFuer(wd);
+    if (!f.length) return 'Ruhetag';
+    return f.map(function (z) {
+      return hhmm(z.opens) + '–' + hhmm(z.closes) + (z.label ? ' ' + z.label : '');
+    }).join(', ');
+  }
+
+  function konfigSchreiben(r) {
+    var el = document.querySelector('[data-res-config]');
+    if (!el) {
+      el = document.createElement('div');
+      el.setAttribute('data-res-config', '');
+      el.style.display = 'none';
+      document.body.appendChild(el);
+    }
+    var heute = spanne(new Date().getDay());
+    if (!heute) {
+      var alle = [];
+      for (var d = 0; d < 7; d++) { var sp = spanne(d); if (sp) alle.push(sp); }
+      if (alle.length) {
+        heute = {
+          start: alle.map(function (x) { return x.start; }).sort()[0],
+          ende:  alle.map(function (x) { return x.ende; }).sort().pop()
+        };
+      }
+    }
+    setzeWennLeer(el, 'data-res-capacity',      r.capacity);
+    setzeWennLeer(el, 'data-res-service-start', heute ? heute.start : hhmm(r.service_start));
+    setzeWennLeer(el, 'data-res-service-end',   heute ? heute.ende  : hhmm(r.service_end));
+    setzeWennLeer(el, 'data-res-closed-weekdays',
+      (zeiten.length ? ruhetage() : (r.closed_weekdays || [])).join(','));
+    if (r.timezone) setzeWennLeer(el, 'data-res-timezone', r.timezone);
+    return el;
+  }
+
+  function schliesstageSchreiben(liste) {
+    var host = document.querySelector('[data-res-closed-list]');
+    if (!host) {
+      host = document.createElement('div');
+      host.setAttribute('data-res-closed-list', '');
+      document.body.appendChild(host);
+    }
+    host.style.display = 'none';
+    var frag = document.createDocumentFragment();
+    liste.forEach(function (c) {
+      var d = document.createElement('div');
+      d.setAttribute('data-res-closed', '');
+      d.setAttribute('data-res-closed-from', c.starts_on);
+      if (c.ends_on) d.setAttribute('data-res-closed-to', c.ends_on);
+      d.setAttribute('data-res-closed-label', c.label || 'Geschlossen');
+      frag.appendChild(d);
+    });
+    host.textContent = '';
+    host.appendChild(frag);
+  }
+
+  function anzeigen(r, closures) {
+    var werte = {
+      name:            r.name,
+      capacity:        r.capacity,
+      phone:           r.phone || '',
+      email:           r.email || '',
+      address:         r.address || '',
+      ref_prefix:      r.ref_prefix,
+      service_start:   hhmm(r.service_start),
+      service_end:     hhmm(r.service_end),
+      slot_minutes:    r.slot_minutes,
+      max_party_size:  r.max_party_size,
+      lead_time_hours: r.lead_time_hours,
+      horizon_days:    r.horizon_days,
+      closed_label:    ruhetage().map(function (n) { return WD[n]; }).join(', ') || '—',
+      hours_today:     zeitText(new Date().getDay()),
+      hours_tomorrow:  zeitText((new Date().getDay() + 1) % 7),
+      closures:        closures.map(function (c) {
+        return c.ends_on && c.ends_on !== c.starts_on
+          ? datum(c.starts_on) + ' – ' + datum(c.ends_on)
+          : datum(c.starts_on);
+      }).join(' · ')
+    };
+
+    document.querySelectorAll('[data-shop-hours]').forEach(function (host) {
+      var tpl = host._tpl || host.querySelector('[data-shop-hours-row]');
+      if (!tpl) return;
+      if (!host._tpl) host._tpl = tpl.cloneNode(true);
+      var frag = document.createDocumentFragment();
+      [1,2,3,4,5,6,0].forEach(function (wd) {
+        var row = host._tpl.cloneNode(true);
+        var tag = row.querySelector('[data-shop-hours-day]');
+        var zeit = row.querySelector('[data-shop-hours-time]');
+        if (tag)  tag.textContent = WD[wd];
+        if (zeit) zeit.textContent = zeitText(wd);
+        row.setAttribute('data-shop-hours-state', fensterFuer(wd).length ? 'offen' : 'zu');
+        if (wd === new Date().getDay()) row.setAttribute('data-shop-hours-today', '');
+        frag.appendChild(row);
+      });
+      host.textContent = '';
+      host.appendChild(frag);
+    });
+
+    document.querySelectorAll('[data-shop]').forEach(function (el) {
+      var k = el.getAttribute('data-shop');
+      if (!(k in werte)) return console.warn('[tavo] unbekanntes Einstellungsfeld:', k);
+      var v = werte[k];
+      var t = v === null || v === undefined ? '' : String(v);
+      if (el.textContent !== t) el.textContent = t;
+      if (!el.hasAttribute('data-shop-keep')) el.style.display = v === '' ? 'none' : '';
+    });
+  }
+
+  async function laden() {
+    var db = window.tavoDB;
+    if (!db || !window.tavoSession) return console.warn('[tavo] Core nicht geladen');
+    var s = await window.tavoSession;
+    if (!s) return;
+    var rid = s.restaurantId;
+
+    // Drei Abfragen parallel statt nacheinander.
+    var alle = await Promise.all([
+      db.from('restaurants').select('*').eq('id', rid).single(),
+      db.from('opening_hours').select('weekday,opens,closes,label')
+        .eq('restaurant_id', rid).order('weekday', { ascending: true }),
+      db.from('closures').select('starts_on,ends_on,label')
+        .eq('restaurant_id', rid).order('starts_on', { ascending: true })
+    ]);
+    var rr = alle[0], oh = alle[1], cc = alle[2];
+
+    if (rr.error) return console.error('[tavo]', rr.error.message);
+    var r = rr.data;
+    zeiten = oh.error ? [] : oh.data;
+    if (oh.error) console.warn('[tavo] Öffnungszeiten:', oh.error.message);
+    var closures = cc.error ? [] : cc.data;
+
+    window.tavoRestaurant = r;
+    window.tavoClosures = closures;
+    window.tavoHours = zeiten;
+
+    window.tavoSnippetVars = window.tavoSnippetVars || {};
+    window.tavoSnippetVars.restaurant = r.name;
+    if (r.phone) window.tavoSnippetVars.telefon = r.phone;
+
+    konfigSchreiben(r);
+    schliesstageSchreiben(closures);
+    anzeigen(r, closures);
+
+    if (window.tavoReservierungen) window.tavoReservierungen.refresh();
+
+    document.dispatchEvent(new CustomEvent('tavo:settings', {
+      detail: { restaurant: r, closures: closures }
+    }));
+  }
+
+  window.Tavo = window.Tavo || {};
+  window.Tavo.saveSettings = async function (aenderungen) {
+    var db = window.tavoDB, r = window.tavoRestaurant;
+    if (!db || !r) throw new Error('Einstellungen noch nicht geladen');
+    var res = await db.from('restaurants').update(aenderungen).eq('id', r.id).select().single();
+    if (res.error) throw res.error;
+    window.tavoRestaurant = res.data;
+    konfigSchreiben(res.data);
+    anzeigen(res.data, window.tavoClosures || []);
+    if (window.tavoReservierungen) window.tavoReservierungen.refresh();
+    return res.data;
+  };
+
+  window.Tavo.addClosure = async function (von, bis, label) {
+    var db = window.tavoDB, r = window.tavoRestaurant;
+    if (!db || !r) throw new Error('Einstellungen noch nicht geladen');
+    var res = await db.from('closures').insert({
+      restaurant_id: r.id, starts_on: von, ends_on: bis || null,
+      label: label || 'Geschlossen'
+    }).select().single();
+    if (res.error) throw res.error;
+    await laden();
+    return res.data;
+  };
+
+  window.Tavo.setHours = async function (weekday, fenster) {
+    var db = window.tavoDB, r = window.tavoRestaurant;
+    if (!db || !r) throw new Error('Einstellungen noch nicht geladen');
+    var del = await db.from('opening_hours').delete()
+      .eq('restaurant_id', r.id).eq('weekday', weekday);
+    if (del.error) throw del.error;
+    if (fenster && fenster.length) {
+      var rows = fenster.map(function (f) {
+        return { restaurant_id: r.id, weekday: weekday,
+                 opens: f.opens, closes: f.closes, label: f.label || null };
+      });
+      var ins = await db.from('opening_hours').insert(rows);
+      if (ins.error) throw ins.error;
+    }
+    await laden();
+    return zeiten;
+  };
+
+  window.Tavo.getHours = function (weekday) {
+    return weekday === undefined ? zeiten : fensterFuer(weekday);
+  };
+
+  window.Tavo.reloadSettings = laden;
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', laden);
+  else laden();
+})();
+</script>
+<script>
+/* ============================================================
+   tavo — Analyse-Einstellungen (Ø-Bon, Personalbedarf) v1
+   Sheet [data-sheet="einstellungen"], geöffnet über
+   [data-sheet-open="einstellungen"]. Nutzt das bestehende
+   Einstellungs-System (Tavo.saveSettings / window.tavoRestaurant),
+   schreibt also nicht an der Datenbank vorbei.
+
+   Felder: [data-set-input="avg_check"], [data-set-input="guests_per_staff"]
+   [data-set-save] · [data-set-msg] · [data-set-locked]
+   Öffner: [data-owner-only] — bleibt für Mitarbeiter unsichtbar.
+   ============================================================ */
+(function () {
+  'use strict';
+  function q(s, r) { return (r || document).querySelector(s); }
+
+  function fuellen() {
+    var r = window.tavoRestaurant;
+    if (!r) return;
+    var a = q('[data-set-input="avg_check"]'); if (a) a.value = r.avg_check;
+    var g = q('[data-set-input="guests_per_staff"]'); if (g) g.value = r.guests_per_staff;
+  }
+
+  async function sichtbarkeit() {
+    var opener = q('[data-owner-only]');
+    var s = window.tavoSession && await window.tavoSession;
+    var isOwner = !!s && s.role === 'owner';
+    if (opener) opener.style.display = isOwner ? '' : 'none';
+    var form = q('[data-sheet="einstellungen"] form, [data-sheet="einstellungen"] .rs-set-body');
+    var locked = q('[data-set-locked]');
+    if (form) form.style.display = isOwner ? '' : 'none';
+    if (locked) locked.style.display = isOwner ? 'none' : '';
+    return isOwner;
+  }
+
+  async function speichern() {
+    var btn = q('[data-set-save]'), msg = q('[data-set-msg]');
+    var avgEl = q('[data-set-input="avg_check"]'), guestEl = q('[data-set-input="guests_per_staff"]');
+    var avg = parseFloat(avgEl && avgEl.value), guests = parseInt(guestEl && guestEl.value, 10);
+    if (msg) msg.classList.remove('is-bad');
+    if (!isFinite(avg) || avg < 0) { if (msg) { msg.textContent = 'Ø-Bon bitte als Zahl ab 0 eingeben.'; msg.classList.add('is-bad'); } return; }
+    if (!isFinite(guests) || guests < 1) { if (msg) { msg.textContent = 'Gäste pro Servicekraft bitte als Zahl ab 1 eingeben.'; msg.classList.add('is-bad'); } return; }
+    if (msg) msg.textContent = 'Speichert …';
+    if (btn) btn.classList.add('is-off');
+    try {
+      await window.Tavo.saveSettings({ avg_check: avg, guests_per_staff: guests });
+      if (msg) msg.textContent = 'Gespeichert.';
+      if (window.tavoAnalyse && window.tavoAnalyse.reload) window.tavoAnalyse.reload();
+    } catch (err) {
+      console.warn('[tavo-einstellungen]', err && err.message);
+      if (msg) { msg.textContent = 'Konnte nicht gespeichert werden — bitte erneut versuchen.'; msg.classList.add('is-bad'); }
+    } finally {
+      if (btn) btn.classList.remove('is-off');
+    }
+  }
+
+  document.addEventListener('click', function (e) {
+    var save = e.target.closest && e.target.closest('[data-set-save]');
+    if (save) { e.preventDefault(); speichern(); }
+    var open = e.target.closest && e.target.closest('[data-sheet-open="einstellungen"]');
+    if (open) { sichtbarkeit(); fuellen(); }
+  });
+  document.addEventListener('submit', function (e) {
+    if (e.target.closest && e.target.closest('[data-sheet="einstellungen"]')) e.preventDefault();
+  });
+  document.addEventListener('tavo:settings', fuellen);
+
+  sichtbarkeit();
+})();
+</script>
